@@ -1,7 +1,5 @@
 {
   "name": "Patel Sons Time Tracker",
   "description": "A Progressive Web App for Patel Sons employees to track their working hours accurately using GPS. Features automated shop time tracking, manual trip recording, and earnings calculation.",
-  "requestFramePermissions": [
-    "geolocation"
-  ]
+  "requestFramePermissions": []
 }

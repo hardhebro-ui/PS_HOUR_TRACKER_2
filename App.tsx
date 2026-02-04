@@ -112,7 +112,7 @@ const App: React.FC = () => {
 
         const totalShop = shopSessions.reduce((acc, s) => acc + (s.durationMs || 0), 0);
         const totalTrip = tripSessions.reduce((acc, t) => acc + (t.durationMs || 0), 0);
-        const pendingTripTime = pendingTrips.filter(t => t.date === today).reduce((acc, t) => acc + (t.durationMs || 0), 0);
+        const pendingTripTime = pendingTrips.filter(t => t.date === today && t.endTime).reduce((acc, t) => acc + (t.durationMs || 0), 0);
         
         setTodaysShopTime(totalShop);
         setTodaysTripTime(totalTrip + pendingTripTime);
@@ -120,10 +120,64 @@ const App: React.FC = () => {
     
     useEffect(() => {
         if (!user) return;
-        const initializeUserSession = async () => {
-            // ... (cleanup and resume logic remains the same)
-            await fetchTodaysTotals(user.mobile);
+
+        const cleanupIncompleteSessions = async (userId: string) => {
+            const todayStr = getTodaysDateString();
+            const allShopSessions = await db.getAllShopSessions(userId);
+            const allTripSessions = await db.getAllTripSessions(userId);
+
+            const incompleteSessions = [
+                ...allShopSessions.filter(s => !s.endTime && s.date < todayStr),
+                ...allTripSessions.filter(t => !t.endTime && t.date < todayStr)
+            ];
+
+            if (incompleteSessions.length === 0) return;
+            console.log(`Cleaning up ${incompleteSessions.length} incomplete sessions from previous days...`);
+
+            const promises = incompleteSessions.map(session => {
+                const sessionDate = new Date(session.startTime);
+                sessionDate.setHours(WORK_END_HOUR, 0, 0, 0);
+                const endTime = sessionDate.getTime();
+                const durationMs = Math.max(0, endTime - session.startTime);
+                const updates = { endTime, durationMs };
+                if ('path' in session) {
+                    return db.updateTripSession(userId, session.id, updates);
+                }
+                return db.updateShopSession(userId, session.id, updates);
+            });
+            await Promise.all(promises);
         };
+
+        const resumeTodaysSession = async (userId: string) => {
+            const today = getTodaysDateString();
+            
+            const shopSessions = await db.getShopSessions(userId, today);
+            const activeShopSession = shopSessions.find(s => !s.endTime);
+            if (activeShopSession) {
+                console.log("Resuming active shop session from today.");
+                setTrackingStatus(TrackingStatus.IN_SHOP);
+                setCurrentSessionStartTime(activeShopSession.startTime);
+                activeSessionIdRef.current = activeShopSession.id;
+                return;
+            }
+
+            const tripSessions = await db.getTripSessions(userId, today);
+            const activeTripSession = tripSessions.find(t => !t.endTime);
+            if (activeTripSession) {
+                console.log("Resuming active trip session from today.");
+                setTrackingStatus(TrackingStatus.ON_TRIP);
+                setCurrentSessionStartTime(activeTripSession.startTime);
+                activeSessionIdRef.current = activeTripSession.id;
+                return;
+            }
+        };
+
+        const initializeUserSession = async () => {
+            await cleanupIncompleteSessions(user.mobile);
+            await fetchTodaysTotals(user.mobile);
+            await resumeTodaysSession(user.mobile);
+        };
+
         initializeUserSession();
     }, [user, fetchTodaysTotals]);
 
@@ -163,6 +217,14 @@ const App: React.FC = () => {
         activeSessionIdRef.current = null;
         setCurrentSessionStartTime(null);
     }, [user, trackingStatus, currentSessionStartTime]);
+
+    const endDay = async () => {
+        const isActive = trackingStatus === TrackingStatus.IN_SHOP || trackingStatus === TrackingStatus.ON_TRIP;
+        if (isActive) {
+            await endCurrentSession(Date.now());
+            setTrackingStatus(TrackingStatus.IDLE);
+        }
+    };
 
     const startNewSession = useCallback(async (status: TrackingStatus.IN_SHOP | TrackingStatus.ON_TRIP, startTime: number) => {
         if (!user) return;
@@ -263,7 +325,7 @@ const App: React.FC = () => {
                 <>
                     <main className="flex-grow overflow-y-auto p-4 pb-20">
                         <Routes>
-                            <Route path="/" element={<HomeScreen {...{trackingStatus, todaysShopTime, todaysTripTime, currentSessionStartTime, hourlyRate: settings?.hourlyRate || 0, shopLocationSet: !!settings?.shopLocation}} />} />
+                            <Route path="/" element={<HomeScreen {...{trackingStatus, todaysShopTime, todaysTripTime, currentSessionStartTime, hourlyRate: settings?.hourlyRate || 0, shopLocationSet: !!settings?.shopLocation, endDay}} />} />
                             <Route path="/trip" element={<TripScreen {...{isTripActive: trackingStatus === TrackingStatus.ON_TRIP, toggleTrip, currentTripStartTime: trackingStatus === TrackingStatus.ON_TRIP ? currentSessionStartTime : null, userId: user.mobile, shopLocationSet: !!settings?.shopLocation, isOnline}} />} />
                             <Route path="/history" element={<HistoryScreen {...{userId: user.mobile, hourlyRate: settings?.hourlyRate || 0}} />} />
                             <Route path="/settings" element={<SettingsScreen {...{settings, updateSettings, handleLogout}} />} />
