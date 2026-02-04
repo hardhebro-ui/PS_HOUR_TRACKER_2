@@ -1,14 +1,8 @@
 
 import React, { useState } from 'react';
 import { db } from '../services/firebase';
-import { User, UserSettings } from '../types';
-import { hashPassword, verifyPassword } from '../utils/crypto';
 
-interface AuthScreenProps {
-    onLogin: (user: User, settings: UserSettings | null) => void;
-}
-
-const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
+const AuthScreen: React.FC = () => {
     const [isLogin, setIsLogin] = useState(true);
     const [name, setName] = useState('');
     const [mobile, setMobile] = useState('');
@@ -23,28 +17,24 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
 
         try {
             if (isLogin) {
-                const user = await db.getUser(mobile);
-                if (!user || !user.hashedPassword) {
-                    throw new Error("Invalid mobile number or password.");
-                }
-                const passwordMatch = await verifyPassword(password, user.hashedPassword);
-                if (!passwordMatch) {
-                    throw new Error("Invalid mobile number or password.");
-                }
-                const settings = await db.getSettings(user.mobile);
-                onLogin(user, settings);
+                await db.loginUser({ mobile, password });
+                // Navigation will be handled by the onAuthChange listener in App.tsx
             } else {
                 if (!name || !mobile || !password) {
                     throw new Error("All fields are required.");
                 }
-                const hashedPassword = await hashPassword(password);
-                const newUser: User = { name, mobile, hashedPassword };
-                await db.createUser(newUser);
-                const settings = await db.getSettings(newUser.mobile);
-                onLogin(newUser, settings);
+                await db.registerUser({ name, mobile, password });
             }
         } catch (err: any) {
-            setError(err.message);
+            // Handle specific Firebase auth errors
+            if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+                setError('Invalid mobile number or password.');
+            } else if (err.code === 'auth/email-already-in-use') {
+                setError('An account with this mobile number already exists.');
+            } else {
+                setError("An unknown error occurred. Please try again.");
+            }
+            console.error(err);
         } finally {
             setLoading(false);
         }
