@@ -1,5 +1,7 @@
 {
   "name": "Work Hours Tracker",
   "description": "A Progressive Web App for tracking your working hours accurately using GPS. Features automated location-based time tracking, manual trip recording, and earnings calculation.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "geolocation"
+  ]
 }

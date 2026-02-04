@@ -1,4 +1,3 @@
-
 // Centralized configuration for Firebase and other services.
 
 export const firebaseConfig = {
@@ -11,4 +10,5 @@ export const firebaseConfig = {
   measurementId: "G-5QW80BN81E"
 };
 
-export const googleMapsApiKey = "AIzaSyBVyhJD7-gz0Q9nxPQ99V2_6TjBHceOIGw";
+// FIX: Export a placeholder googleMapsApiKey to resolve compilation error in the unused utils/mapsLoader.ts file.
+export const googleMapsApiKey = "";
