@@ -4,10 +4,13 @@ export interface User {
     name: string;
 }
 
-export type PlusCode = string;
+export interface LatLng {
+    lat: number;
+    lng: number;
+}
 
 export interface ShopLocation {
-    plusCode: PlusCode;
+    center: LatLng;
     radius: number;
 }
 
@@ -30,7 +33,7 @@ export interface TripSession {
     endTime?: number;
     durationMs?: number;
     date: string; // YYYY-MM-DD
-    path: PlusCode[];
+    path: LatLng[];
     isPending?: boolean;
 }
 

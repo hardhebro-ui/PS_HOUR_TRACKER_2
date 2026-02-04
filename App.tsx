@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
-import { User, UserSettings, PlusCode, ShopSession, TripSession, TrackingStatus } from './types';
-import { getDistance, encode } from './utils/plusCode';
+import { User, UserSettings, LatLng, ShopSession, TripSession, TrackingStatus } from './types';
+import { getDistance } from './utils/geolocation';
 import { isWithinWorkingHours, getTodaysDateString } from './utils/time';
 import { db } from './services/firebase';
 import { idb } from './utils/indexedDB';
@@ -19,7 +19,7 @@ const App: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [settings, setSettings] = useState<UserSettings | null>(null);
     const [trackingStatus, setTrackingStatus] = useState<TrackingStatus>(TrackingStatus.IDLE);
-    const [currentPosition, setCurrentPosition] = useState<PlusCode | null>(null);
+    const [currentPosition, setCurrentPosition] = useState<LatLng | null>(null);
     
     const [todaysShopTime, setTodaysShopTime] = useState(0);
     const [todaysTripTime, setTodaysTripTime] = useState(0);
@@ -257,7 +257,7 @@ const App: React.FC = () => {
 
     // Core Tracking Logic
     useEffect(() => {
-        if (!user || !settings?.shopLocation || trackingStatus === TrackingStatus.ON_TRIP) {
+        if (!user || !settings?.shopLocation?.center || trackingStatus === TrackingStatus.ON_TRIP) {
             if (watchIdRef.current && trackingStatus !== TrackingStatus.ON_TRIP) {
                 navigator.geolocation.clearWatch(watchIdRef.current);
                 watchIdRef.current = null;
@@ -267,11 +267,11 @@ const App: React.FC = () => {
         const handlePositionUpdate = async (position: GeolocationPosition) => {
             const { latitude, longitude } = position.coords;
             const now = Date.now();
-            const currentPC = encode(latitude, longitude);
-            setCurrentPosition(currentPC);
+            const currentPos = { lat: latitude, lng: longitude };
+            setCurrentPosition(currentPos);
 
             const isWorking = isWithinWorkingHours(new Date(now));
-            const distance = getDistance(currentPC, settings.shopLocation!.plusCode);
+            const distance = getDistance(currentPos, settings.shopLocation!.center);
             const isInside = distance <= (settings.shopLocation?.radius || 50);
             const currentlyInShop = trackingStatus === TrackingStatus.IN_SHOP;
 
@@ -300,11 +300,11 @@ const App: React.FC = () => {
     }, [currentPosition, trackingStatus, user]);
 
     const toggleTrip = async () => {
-        if (!user || !settings?.shopLocation || !currentPosition) return;
+        if (!user || !settings?.shopLocation?.center || !currentPosition) return;
         const now = Date.now();
         if (trackingStatus === TrackingStatus.ON_TRIP) {
             await endCurrentSession(now);
-            const distance = getDistance(currentPosition, settings.shopLocation.plusCode);
+            const distance = getDistance(currentPosition, settings.shopLocation.center);
             const isInside = distance <= (settings.shopLocation.radius || 50);
             if(isWithinWorkingHours(new Date(now)) && isInside) {
                 await startNewSession(TrackingStatus.IN_SHOP, now);
@@ -327,8 +327,8 @@ const App: React.FC = () => {
                 <>
                     <main className="flex-grow overflow-y-auto p-4 pb-20">
                         <Routes>
-                            <Route path="/" element={<HomeScreen {...{trackingStatus, todaysShopTime, todaysTripTime, currentSessionStartTime, hourlyRate: settings?.hourlyRate || 0, shopLocationSet: !!settings?.shopLocation, endDay}} />} />
-                            <Route path="/trip" element={<TripScreen {...{isTripActive: trackingStatus === TrackingStatus.ON_TRIP, toggleTrip, currentTripStartTime: trackingStatus === TrackingStatus.ON_TRIP ? currentSessionStartTime : null, userId: user.mobile, shopLocationSet: !!settings?.shopLocation, isOnline}} />} />
+                            <Route path="/" element={<HomeScreen {...{trackingStatus, todaysShopTime, todaysTripTime, currentSessionStartTime, hourlyRate: settings?.hourlyRate || 0, shopLocationSet: !!settings?.shopLocation?.center, endDay}} />} />
+                            <Route path="/trip" element={<TripScreen {...{isTripActive: trackingStatus === TrackingStatus.ON_TRIP, toggleTrip, currentTripStartTime: trackingStatus === TrackingStatus.ON_TRIP ? currentSessionStartTime : null, userId: user.mobile, shopLocationSet: !!settings?.shopLocation?.center, isOnline}} />} />
                             <Route path="/history" element={<HistoryScreen {...{userId: user.mobile, hourlyRate: settings?.hourlyRate || 0}} />} />
                             <Route path="/settings" element={<SettingsScreen {...{settings, updateSettings, handleLogout}} />} />
                         </Routes>

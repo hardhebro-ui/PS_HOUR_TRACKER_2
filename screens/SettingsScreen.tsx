@@ -45,11 +45,11 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ settings, updateSetting
 
             <div className="bg-white p-6 rounded-xl shadow-lg">
                 <h2 className="text-xl font-semibold text-gray-800 mb-4">Shop Location</h2>
-                {settings?.shopLocation ? (
+                {settings?.shopLocation?.center ? (
                     <div className="space-y-3 text-sm">
                         <div className="flex justify-between">
-                            <span className="font-medium text-gray-500">Plus Code:</span>
-                            <span className="font-mono text-gray-800">{settings.shopLocation.plusCode}</span>
+                            <span className="font-medium text-gray-500">Coordinates:</span>
+                            <span className="font-mono text-gray-800 text-xs">{`Lat: ${settings.shopLocation.center.lat.toFixed(4)}, Lng: ${settings.shopLocation.center.lng.toFixed(4)}`}</span>
                         </div>
                         <div className="flex justify-between">
                             <span className="font-medium text-gray-500">Radius:</span>

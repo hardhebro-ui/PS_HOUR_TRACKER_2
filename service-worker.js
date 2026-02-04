@@ -2,7 +2,6 @@
 // Using compat libraries for easier use in a non-module service worker environment.
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js');
-importScripts('https://cdn.jsdelivr.net/npm/open-location-code@2.0.0/openlocationcode.min.js');
 
 
 // --- Cache Logic ---
@@ -96,15 +95,14 @@ const idb = {
     }
 };
 
-function getDistance(plusCode1, plusCode2) {
-    const point1 = OpenLocationCode.decode(plusCode1);
-    const point2 = OpenLocationCode.decode(plusCode2);
+function getDistance(point1, point2) {
+    if (!point1 || !point2) return Infinity;
 
     const R = 6371e3; // Earth's radius in metres
-    const φ1 = point1.latitudeCenter * Math.PI / 180;
-    const φ2 = point2.latitudeCenter * Math.PI / 180;
-    const Δφ = (point2.latitudeCenter - point1.latitudeCenter) * Math.PI / 180;
-    const Δλ = (point2.longitudeCenter - point1.longitudeCenter) * Math.PI / 180;
+    const φ1 = point1.lat * Math.PI / 180;
+    const φ2 = point2.lat * Math.PI / 180;
+    const Δφ = (point2.lat - point1.lat) * Math.PI / 180;
+    const Δλ = (point2.lng - point1.lng) * Math.PI / 180;
 
     const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
               Math.cos(φ1) * Math.cos(φ2) *
@@ -197,7 +195,7 @@ async function handleLocationSync() {
     }
 
     const settings = await getSettings(userId);
-    if (!settings || !settings.shopLocation) {
+    if (!settings || !settings.shopLocation || !settings.shopLocation.center) {
         console.log('[SW] No shop location settings. Aborting sync.');
         return;
     }
@@ -209,9 +207,9 @@ async function handleLocationSync() {
 
     try {
         const position = await getCurrentLocation();
-        const currentPlusCode = OpenLocationCode.encode(position.coords.latitude, position.coords.longitude);
+        const currentPosition = { lat: position.coords.latitude, lng: position.coords.longitude };
         
-        const distance = getDistance(currentPlusCode, settings.shopLocation.plusCode);
+        const distance = getDistance(currentPosition, settings.shopLocation.center);
         const isInside = distance <= settings.shopLocation.radius;
         const activeSession = await getActiveSession(userId, today);
 

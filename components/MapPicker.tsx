@@ -1,6 +1,6 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ShopLocation } from '../types';
-import { encode, decode, isValid } from '../utils/plusCode';
+import { ShopLocation, LatLng } from '../types';
 
 interface MapPickerProps {
     initialLocation: ShopLocation | null;
@@ -15,7 +15,7 @@ const MapPicker: React.FC<MapPickerProps> = ({ initialLocation, onSave, onCancel
     const placesService = useRef<any | null>(null);
     const idleTimeout = useRef<number | null>(null);
 
-    const [currentPlusCode, setCurrentPlusCode] = useState(initialLocation?.plusCode || '');
+    const [currentCenter, setCurrentCenter] = useState<LatLng | null>(initialLocation?.center || null);
     const [radius, setRadius] = useState(initialLocation?.radius || 50);
     const [nearbyPlaces, setNearbyPlaces] = useState<any[]>([]);
     const [isSearching, setIsSearching] = useState(false);
@@ -57,64 +57,70 @@ const MapPicker: React.FC<MapPickerProps> = ({ initialLocation, onSave, onCancel
     }, []);
 
     useEffect(() => {
+        let intervalId: number | undefined;
+
         const initMap = () => {
-            let initialCenter = { lat: 20.5937, lng: 78.9629 }; // Default to India center
-            if (initialLocation && isValid(initialLocation.plusCode)) {
-                const decoded = decode(initialLocation.plusCode);
-                initialCenter = { lat: decoded.lat, lng: decoded.lng };
-            }
+            try {
+                let initialCenter = { lat: 20.5937, lng: 78.9629 }; // Default to India center
+                if (initialLocation?.center) {
+                    initialCenter = initialLocation.center;
+                    setCurrentCenter(initialLocation.center);
+                }
 
-            if (mapRef.current && !mapInstance.current) {
-                mapInstance.current = new (window as any).google.maps.Map(mapRef.current, {
-                    center: initialCenter,
-                    zoom: 17,
-                    disableDefaultUI: true,
-                    gestureHandling: 'greedy',
-                });
-                
-                placesService.current = new (window as any).google.maps.places.PlacesService(mapInstance.current);
-                
-                circleInstance.current = new (window as any).google.maps.Circle({
-                    strokeColor: '#1A73E8',
-                    strokeOpacity: 0.8,
-                    strokeWeight: 2,
-                    fillColor: '#1A73E8',
-                    fillOpacity: 0.25,
-                    map: mapInstance.current,
-                    center: initialCenter,
-                    radius: radius,
-                });
+                if (mapRef.current && !mapInstance.current) {
+                    mapInstance.current = new (window as any).google.maps.Map(mapRef.current, {
+                        center: initialCenter,
+                        zoom: 17,
+                        disableDefaultUI: true,
+                        gestureHandling: 'greedy',
+                    });
+                    
+                    placesService.current = new (window as any).google.maps.places.PlacesService(mapInstance.current);
+                    
+                    circleInstance.current = new (window as any).google.maps.Circle({
+                        strokeColor: '#1A73E8',
+                        strokeOpacity: 0.8,
+                        strokeWeight: 2,
+                        fillColor: '#1A73E8',
+                        fillOpacity: 0.25,
+                        map: mapInstance.current,
+                        center: initialCenter,
+                        radius: radius,
+                    });
 
-                mapInstance.current.addListener('center_changed', () => {
-                    const newCenter = mapInstance.current?.getCenter();
-                    if(newCenter) {
-                         const newPlusCode = encode(newCenter.lat(), newCenter.lng());
-                         setCurrentPlusCode(newPlusCode);
-                         circleInstance.current?.setCenter(newCenter);
-                    }
-                });
-                
-                mapInstance.current.addListener('idle', () => {
-                    if (idleTimeout.current) clearTimeout(idleTimeout.current);
-                    idleTimeout.current = window.setTimeout(() => {
-                         searchNearby();
-                    }, 500); // Debounce search
-                });
+                    mapInstance.current.addListener('center_changed', () => {
+                        const newCenter = mapInstance.current?.getCenter();
+                        if(newCenter) {
+                             const newCenterCoords = { lat: newCenter.lat(), lng: newCenter.lng() };
+                             setCurrentCenter(newCenterCoords);
+                             circleInstance.current?.setCenter(newCenter);
+                        }
+                    });
+                    
+                    mapInstance.current.addListener('idle', () => {
+                        if (idleTimeout.current) clearTimeout(idleTimeout.current);
+                        idleTimeout.current = window.setTimeout(() => {
+                             searchNearby();
+                        }, 500); // Debounce search
+                    });
 
-                searchNearby();
-            }
+                    searchNearby();
+                }
 
-            if (!initialLocation) {
-                 panMapToCurrentLocation();
+                if (!initialLocation) {
+                     panMapToCurrentLocation();
+                }
+            } catch(error) {
+                console.error("Failed to initialize Google Map:", error);
             }
         };
 
         if ((window as any).google && (window as any).google.maps.places) {
             initMap();
         } else {
-            const interval = setInterval(() => {
+            intervalId = window.setInterval(() => {
                 if ((window as any).google && (window as any).google.maps.places) {
-                    clearInterval(interval);
+                    clearInterval(intervalId);
                     initMap();
                 }
             }, 100);
@@ -122,16 +128,19 @@ const MapPicker: React.FC<MapPickerProps> = ({ initialLocation, onSave, onCancel
         
         return () => {
             if (idleTimeout.current) clearTimeout(idleTimeout.current);
+            if (intervalId) clearInterval(intervalId);
         }
-    }, [initialLocation, panMapToCurrentLocation, searchNearby, radius]);
+    }, [initialLocation, panMapToCurrentLocation, searchNearby]);
 
     useEffect(() => {
-        circleInstance.current?.setRadius(radius);
+        if(circleInstance.current) {
+            circleInstance.current.setRadius(radius);
+        }
     }, [radius]);
     
     const handleSave = () => {
-        if(isValid(currentPlusCode)) {
-            onSave({ plusCode: currentPlusCode, radius });
+        if(currentCenter) {
+            onSave({ center: currentCenter, radius });
         }
     };
 
@@ -143,20 +152,22 @@ const MapPicker: React.FC<MapPickerProps> = ({ initialLocation, onSave, onCancel
 
     return (
         <div className="fixed inset-0 z-50 flex flex-col bg-gray-800">
-            <div ref={mapRef} className="flex-grow w-full h-full" />
+            <div ref={mapRef} className="flex-grow w-full" />
             
             {/* Center Marker */}
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-full pointer-events-none">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-10 h-10 text-red-500 drop-shadow-lg">
-                    <path fillRule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75 0 5.385 4.365 9.75 9.75 9.75s9.75-4.365 9.75-9.75C21.75 6.615 17.385 2.25 12 2.25zM12.75 6a.75.75 0 00-1.5 0v6c0 .414.336.75.75.75h4.5a.75.75 0 000-1.5h-3.75V6z" clipRule="evenodd" />
+                  <path fillRule="evenodd" d="M12 2.25c-2.485 0-4.5 2.015-4.5 4.5 0 2.485 4.5 9.75 4.5 9.75s4.5-7.265 4.5-9.75c0-2.485-2.015-4.5-4.5-4.5zm0 6.75c-.966 0-1.75-.784-1.75-1.75s.784-1.75 1.75-1.75 1.75.784 1.75 1.75-.784 1.75-1.75 1.75z" clipRule="evenodd" />
                 </svg>
             </div>
 
             {/* Controls */}
             <div className="absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/60 to-transparent">
                  <div className="bg-white/90 backdrop-blur-sm p-3 rounded-lg shadow-lg">
-                    <p className="text-black text-center font-mono">{currentPlusCode || 'Move map to set location'}</p>
-                    <div className="mt-2 border-t pt-2">
+                    <p className="text-black text-center font-mono text-sm">
+                        {currentCenter ? `Lat: ${currentCenter.lat.toFixed(5)}, Lng: ${currentCenter.lng.toFixed(5)}` : 'Move map to set location'}
+                    </p>
+                    <div className="mt-2 border-t pt-2 max-h-48 overflow-y-auto">
                         {isSearching && <p className="text-sm text-gray-500 text-center">Searching...</p>}
                         {!isSearching && nearbyPlaces.length > 0 && (
                             <ul className="space-y-1">
