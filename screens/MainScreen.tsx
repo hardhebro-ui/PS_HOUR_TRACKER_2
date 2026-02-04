@@ -119,23 +119,24 @@ const HomeScreen: React.FC<Pick<MainScreenProps, 'trackingStatus' | 'todaysShopT
                 </div>
                 <p className="text-gray-500 text-sm mb-4">{statusInfo.subtext}</p>
                 <div className="text-6xl font-mono font-bold text-gray-800 tracking-wider bg-gray-100 p-4 rounded-lg">
-                    {formatDuration(currentSessionDuration)}
+                    {formatDuration(totalWorkTime)}
                 </div>
-                <p className="text-xs text-gray-400 mt-2">Current Session Timer</p>
+                <p className="text-xs text-gray-400 mt-2">Total Work Time Today</p>
+                {currentSessionStartTime && (
+                    <p className="text-sm text-gray-500 mt-2 h-5">
+                        Current: {formatDuration(currentSessionDuration)}
+                    </p>
+                )}
             </div>
 
             <div className="bg-white p-6 rounded-xl shadow-lg">
-                <h3 className="text-lg font-semibold text-gray-700 mb-4">Today's Summary</h3>
+                <h3 className="text-lg font-semibold text-gray-700 mb-4">Today's Earnings</h3>
+                 <div className="text-center my-4">
+                    <span className="font-bold text-4xl text-green-600">₹{totalEarnings.toFixed(2)}</span>
+                </div>
+                <hr className="my-4"/>
+                <h3 className="text-lg font-semibold text-gray-700 mb-4">Time Breakdown</h3>
                 <div className="space-y-3">
-                     <div className="flex justify-between items-center">
-                        <span className="text-gray-600">Total Work Hours</span>
-                        <span className="font-bold text-lg text-blue-600">{formatDuration(totalWorkTime)}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                        <span className="text-gray-600">Total Earnings</span>
-                        <span className="font-bold text-lg text-green-600">₹{totalEarnings.toFixed(2)}</span>
-                    </div>
-                    <hr className="my-2"/>
                      <div className="flex justify-between items-center text-sm">
                         <span className="text-gray-500">Shop Time</span>
                         <span className="font-medium text-gray-700">{formatDuration(todaysShopTime + (trackingStatus === TrackingStatus.IN_SHOP ? currentSessionDuration : 0))}</span>
@@ -396,18 +397,23 @@ const SettingsScreen: React.FC<Pick<MainScreenProps, 'settings' | 'updateSetting
 
 // --- MAIN COMPONENT ---
 const MainScreen: React.FC<MainScreenProps> = (props) => {
-    switch(props.activeView) {
-        case 'home':
-            return <HomeScreen {...props} />;
-        case 'trip':
-            return <TripScreen {...props} currentSessionStartTime={props.trackingStatus === TrackingStatus.ON_TRIP ? props.currentSessionStartTime : null} />;
-        case 'history':
-            return <HistoryScreen {...props} />;
-        case 'settings':
-            return <SettingsScreen {...props} />;
-        default:
-            return <HomeScreen {...props} />;
-    }
+    const { activeView } = props;
+    return (
+        <>
+            <div style={{ display: activeView === 'home' ? 'block' : 'none' }}>
+                <HomeScreen {...props} />
+            </div>
+            <div style={{ display: activeView === 'trip' ? 'block' : 'none' }}>
+                <TripScreen {...props} currentSessionStartTime={props.trackingStatus === TrackingStatus.ON_TRIP ? props.currentSessionStartTime : null} />
+            </div>
+            <div style={{ display: activeView === 'history' ? 'block' : 'none' }}>
+                <HistoryScreen {...props} />
+            </div>
+            <div style={{ display: activeView === 'settings' ? 'block' : 'none' }}>
+                <SettingsScreen {...props} />
+            </div>
+        </>
+    );
 };
 
 export default MainScreen;
