@@ -56,7 +56,7 @@ self.addEventListener('activate', event => {
 const WORK_START_HOUR = 8;
 const WORK_END_HOUR = 19;
 const firebaseConfig = {
-    apiKey: "AIzaSyDy3i42CEgE64S9i2zbUInCICs2Tm5cFZ8",
+    apiKey: "AIzaSyBVyhJD7-gz0Q9nxPQ99V2_6TjBHceOIGw",
     authDomain: "ps-hour-tracker.firebaseapp.com",
     projectId: "ps-hour-tracker",
     storageBucket: "ps-hour-tracker.firebasestorage.app",

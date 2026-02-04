@@ -29,6 +29,8 @@ const App: React.FC = () => {
 
     const activeSessionIdRef = useRef<string | null>(null);
     const watchIdRef = useRef<number | null>(null);
+    const tripPathBatchRef = useRef<LatLng[]>([]);
+    const tripPathFlushIntervalRef = useRef<number | null>(null);
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -123,6 +125,7 @@ const App: React.FC = () => {
 
         const cleanupIncompleteSessions = async (userId: string) => {
             const todayStr = getTodaysDateString();
+            // These still fetch all, which is acceptable for a one-time cleanup on app start.
             const allShopSessions = await db.getAllShopSessions(userId);
             const allTripSessions = await db.getAllTripSessions(userId);
 
@@ -192,8 +195,23 @@ const App: React.FC = () => {
         if (user) db.saveSettings(user.mobile, newSettings);
     };
 
+    const flushTripPathBatch = useCallback(async () => {
+        if (!user || !activeSessionIdRef.current || tripPathBatchRef.current.length === 0) return;
+
+        console.log(`Flushing ${tripPathBatchRef.current.length} points to trip ${activeSessionIdRef.current}`);
+        if (activeSessionIdRef.current.startsWith('offline_')) {
+             await idb.addTripPathPoints(activeSessionIdRef.current, tripPathBatchRef.current);
+        } else {
+             await db.addTripPathPoints(user.mobile, activeSessionIdRef.current, tripPathBatchRef.current);
+        }
+        tripPathBatchRef.current = [];
+    }, [user]);
+
     const endCurrentSession = useCallback(async (endTime: number) => {
         if (!user || !activeSessionIdRef.current || !currentSessionStartTime) return;
+
+        // Flush any remaining points before ending the session
+        await flushTripPathBatch();
 
         const durationMs = endTime - currentSessionStartTime;
         if (activeSessionIdRef.current.startsWith('offline_')) { // Ending an offline trip
@@ -216,7 +234,7 @@ const App: React.FC = () => {
 
         activeSessionIdRef.current = null;
         setCurrentSessionStartTime(null);
-    }, [user, trackingStatus, currentSessionStartTime]);
+    }, [user, trackingStatus, currentSessionStartTime, flushTripPathBatch]);
 
     const endDay = async () => {
         const isActive = trackingStatus === TrackingStatus.IN_SHOP || trackingStatus === TrackingStatus.ON_TRIP;
@@ -288,16 +306,26 @@ const App: React.FC = () => {
         return () => { if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current); };
     }, [user, settings, trackingStatus, endCurrentSession, startNewSession]);
 
-    // Trip GPS Path recording
+    // Trip GPS Path recording (Batching)
     useEffect(() => {
-        if (trackingStatus === TrackingStatus.ON_TRIP && user && activeSessionIdRef.current && currentPosition) {
-            if (activeSessionIdRef.current.startsWith('offline_')) {
-                idb.addTripPathPoint(activeSessionIdRef.current, currentPosition);
-            } else {
-                db.addTripPathPoint(user.mobile, activeSessionIdRef.current, currentPosition);
-            }
+        if (trackingStatus === TrackingStatus.ON_TRIP && currentPosition) {
+            tripPathBatchRef.current.push(currentPosition);
         }
-    }, [currentPosition, trackingStatus, user]);
+
+        // Setup/teardown for the batch flush interval
+        if (trackingStatus === TrackingStatus.ON_TRIP && !tripPathFlushIntervalRef.current) {
+            tripPathFlushIntervalRef.current = window.setInterval(flushTripPathBatch, 60 * 1000); // Flush every 60 seconds
+        } else if (trackingStatus !== TrackingStatus.ON_TRIP && tripPathFlushIntervalRef.current) {
+            clearInterval(tripPathFlushIntervalRef.current);
+            tripPathFlushIntervalRef.current = null;
+        }
+
+        return () => {
+            if (tripPathFlushIntervalRef.current) {
+                clearInterval(tripPathFlushIntervalRef.current);
+            }
+        };
+    }, [currentPosition, trackingStatus, flushTripPathBatch]);
 
     const toggleTrip = async () => {
         if (!user || !settings?.shopLocation?.center || !currentPosition) return;

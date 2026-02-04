@@ -21,13 +21,17 @@ import {
     getDocs,
     arrayUnion,
     DocumentData,
-    DocumentSnapshot
+    DocumentSnapshot,
+    orderBy,
+    limit,
+    startAfter,
+    Query
 } from "firebase/firestore";
 import { User, UserSettings, ShopSession, TripSession, LatLng } from '../types';
 
 // Provided Firebase config
 const firebaseConfig = {
-  apiKey: "AIzaSyDy3i42CEgE64S9i2zbUInCICs2Tm5cFZ8",
+  apiKey: "AIzaSyBVyhJD7-gz0Q9nxPQ99V2_6TjBHceOIGw",
   authDomain: "ps-hour-tracker.firebaseapp.com",
   projectId: "ps-hour-tracker",
   storageBucket: "ps-hour-tracker.firebasestorage.app",
@@ -142,10 +146,10 @@ export const db = {
         await updateDoc(tripRef, updates);
     },
     
-    async addTripPathPoint(userId: string, sessionId: string, point: LatLng): Promise<void> {
+    async addTripPathPoints(userId: string, sessionId: string, points: LatLng[]): Promise<void> {
         const tripRef = doc(firestore, "users", userId, "trips", sessionId);
         await updateDoc(tripRef, {
-            path: arrayUnion(point)
+            path: arrayUnion(...points)
         });
     },
 
@@ -160,5 +164,34 @@ export const db = {
         const tripsCollectionRef = collection(firestore, "users", userId, "trips");
         const querySnapshot = await getDocs(tripsCollectionRef);
         return querySnapshot.docs.map(doc => fromDoc<TripSession>(doc));
+    },
+
+    // --- PAGINATED HISTORY ---
+    async getPaginatedShopSessions(userId: string, limitCount: number, startAfterDoc?: DocumentSnapshot) {
+        const sessionsCollectionRef = collection(firestore, "users", userId, "shop_sessions");
+        let q: Query;
+        if (startAfterDoc) {
+            q = query(sessionsCollectionRef, orderBy("startTime", "desc"), startAfter(startAfterDoc), limit(limitCount));
+        } else {
+            q = query(sessionsCollectionRef, orderBy("startTime", "desc"), limit(limitCount));
+        }
+        const querySnapshot = await getDocs(q);
+        const sessions = querySnapshot.docs.map(doc => fromDoc<ShopSession>(doc));
+        const lastDoc = querySnapshot.docs[querySnapshot.docs.length - 1];
+        return { sessions, lastDoc };
+    },
+
+    async getPaginatedTripSessions(userId: string, limitCount: number, startAfterDoc?: DocumentSnapshot) {
+        const tripsCollectionRef = collection(firestore, "users", userId, "trips");
+        let q: Query;
+        if (startAfterDoc) {
+            q = query(tripsCollectionRef, orderBy("startTime", "desc"), startAfter(startAfterDoc), limit(limitCount));
+        } else {
+            q = query(tripsCollectionRef, orderBy("startTime", "desc"), limit(limitCount));
+        }
+        const querySnapshot = await getDocs(q);
+        const sessions = querySnapshot.docs.map(doc => fromDoc<TripSession>(doc));
+        const lastDoc = querySnapshot.docs[querySnapshot.docs.length - 1];
+        return { sessions, lastDoc };
     }
 };

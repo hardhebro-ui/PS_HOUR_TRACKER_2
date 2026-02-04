@@ -73,7 +73,7 @@ export const idb = {
         const transaction = db.transaction(TRIP_STORE, 'readwrite');
         transaction.objectStore(TRIP_STORE).clear();
     },
-    async addTripPathPoint(tripId: string, point: LatLng): Promise<void> {
+    async addTripPathPoints(tripId: string, points: LatLng[]): Promise<void> {
         const db = await getDB();
         const transaction = db.transaction(TRIP_STORE, 'readwrite');
         const store = transaction.objectStore(TRIP_STORE);
@@ -81,7 +81,7 @@ export const idb = {
         request.onsuccess = () => {
             const trip = request.result;
             if (trip) {
-                trip.path.push(point);
+                trip.path.push(...points);
                 store.put(trip);
             }
         };
