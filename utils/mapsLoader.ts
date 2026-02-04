@@ -1,4 +1,6 @@
 
+import { googleMapsApiKey } from "../config";
+
 const GOOGLE_MAPS_CALLBACK_NAME = 'initMapCallback';
 let scriptPromise: Promise<void> | null = null;
 
@@ -11,7 +13,7 @@ export const loadGoogleMapsScript = (): Promise<void> => {
         return scriptPromise;
     }
     
-    const apiKey = "AIzaSyBVyhJD7-gz0Q9nxPQ99V2_6TjBHceOIGw";
+    const apiKey = googleMapsApiKey;
     if (!apiKey) {
         console.error("Google Maps API key is not available.");
         return Promise.reject(new Error("Missing Google Maps API Key"));
