@@ -2,7 +2,6 @@
 export interface User {
     mobile: string;
     name: string;
-    hashedPassword?: string; // only in DB
 }
 
 export interface LocationCoords {

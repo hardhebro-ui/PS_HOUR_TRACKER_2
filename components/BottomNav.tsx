@@ -2,7 +2,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 
-const NavItem: React.FC<{ to: string; icon: JSX.Element; label: string }> = ({ to, icon, label }) => {
+const NavItem: React.FC<{ to: string; icon: React.ReactElement; label: string }> = ({ to, icon, label }) => {
     const activeClass = 'text-blue-600';
     const inactiveClass = 'text-gray-500';
 
@@ -38,8 +38,16 @@ const BottomNav: React.FC = () => {
                     label="Trip"
                     icon={
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            {/* FIX: Replaced corrupted SVG path data which was causing a JSX parsing error. */}
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9V3m0 18a9 9 0 00-9-9m-9 9a9 9 0 019-9" />
+                        </svg>
+                    }
+                />
+                <NavItem
+                    to="/history"
+                    label="History"
+                    icon={
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                     }
                 />
