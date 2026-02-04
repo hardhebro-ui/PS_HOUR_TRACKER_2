@@ -1,32 +1,30 @@
 
+import { TripSession, LocationCoords } from '../types';
+
 const DB_NAME = 'PatelSonsDB';
-const DB_VERSION = 1;
-const STORE_NAME = 'userState';
+const DB_VERSION = 2; // Incremented version for new store
+const USER_STORE = 'userState';
+const TRIP_STORE = 'pendingTrips';
 
 let db: IDBDatabase;
 
 function getDB(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
-        if (db) {
-            return resolve(db);
-        }
+        if (db) return resolve(db);
 
         const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-        request.onerror = (event) => {
-            console.error('IndexedDB error:', request.error);
-            reject('Error opening DB');
-        };
-
+        request.onerror = () => reject('Error opening DB');
         request.onsuccess = (event) => {
             db = (event.target as IDBOpenDBRequest).result;
             resolve(db);
         };
-
         request.onupgradeneeded = (event) => {
             const dbInstance = (event.target as IDBOpenDBRequest).result;
-            if (!dbInstance.objectStoreNames.contains(STORE_NAME)) {
-                dbInstance.createObjectStore(STORE_NAME, { keyPath: 'key' });
+            if (!dbInstance.objectStoreNames.contains(USER_STORE)) {
+                dbInstance.createObjectStore(USER_STORE, { keyPath: 'key' });
+            }
+            if (!dbInstance.objectStoreNames.contains(TRIP_STORE)) {
+                dbInstance.createObjectStore(TRIP_STORE, { keyPath: 'id' });
             }
         };
     });
@@ -36,30 +34,56 @@ export const idb = {
     async get<T>(key: string): Promise<T | undefined> {
         const db = await getDB();
         return new Promise((resolve) => {
-            const transaction = db.transaction(STORE_NAME, 'readonly');
-            const store = transaction.objectStore(STORE_NAME);
-            const request = store.get(key);
-            request.onsuccess = () => {
-                resolve(request.result?.value);
-            };
-            request.onerror = () => {
-                resolve(undefined);
-            };
+            const transaction = db.transaction(USER_STORE, 'readonly');
+            const request = transaction.objectStore(USER_STORE).get(key);
+            request.onsuccess = () => resolve(request.result?.value);
+            request.onerror = () => resolve(undefined);
         });
     },
     async set(key: string, value: any): Promise<void> {
         const db = await getDB();
-        return new Promise((resolve, reject) => {
-            const transaction = db.transaction(STORE_NAME, 'readwrite');
-            const store = transaction.objectStore(STORE_NAME);
-            const request = store.put({ key, value });
-            request.onsuccess = () => {
-                resolve();
-            };
-            request.onerror = () => {
-                console.error('IDB set error:', request.error);
-                reject(request.error);
-            };
+        const transaction = db.transaction(USER_STORE, 'readwrite');
+        transaction.objectStore(USER_STORE).put({ key, value });
+    },
+    async addOrUpdatePendingTrip(trip: TripSession): Promise<void> {
+        const db = await getDB();
+        const transaction = db.transaction(TRIP_STORE, 'readwrite');
+        transaction.objectStore(TRIP_STORE).put(trip);
+    },
+    async getPendingTrip(id: string): Promise<TripSession | undefined> {
+        const db = await getDB();
+        return new Promise(resolve => {
+            const transaction = db.transaction(TRIP_STORE, 'readonly');
+            const request = transaction.objectStore(TRIP_STORE).get(id);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => resolve(undefined);
         });
+    },
+    async getAllPendingTrips(): Promise<TripSession[]> {
+        const db = await getDB();
+        return new Promise(resolve => {
+            const transaction = db.transaction(TRIP_STORE, 'readonly');
+            const request = transaction.objectStore(TRIP_STORE).getAll();
+            request.onsuccess = () => resolve(request.result || []);
+            request.onerror = () => resolve([]);
+        });
+    },
+    async clearPendingTrips(): Promise<void> {
+        const db = await getDB();
+        const transaction = db.transaction(TRIP_STORE, 'readwrite');
+        transaction.objectStore(TRIP_STORE).clear();
+    },
+    async addTripPathPoint(tripId: string, point: LocationCoords): Promise<void> {
+        const db = await getDB();
+        const transaction = db.transaction(TRIP_STORE, 'readwrite');
+        const store = transaction.objectStore(TRIP_STORE);
+        const request = store.get(tripId);
+        request.onsuccess = () => {
+            const trip = request.result;
+            if (trip) {
+                trip.path.push(point);
+                store.put(trip);
+            }
+        };
     }
 };

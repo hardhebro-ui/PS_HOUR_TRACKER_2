@@ -33,6 +33,7 @@ export interface TripSession {
     durationMs?: number;
     date: string; // YYYY-MM-DD
     path: LocationCoords[];
+    isPending?: boolean;
 }
 
 export enum TrackingStatus {

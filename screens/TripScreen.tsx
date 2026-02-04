@@ -1,8 +1,9 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { TripSession } from '../types';
 import { formatDuration } from '../utils/time';
 import { db } from '../services/firebase';
+import { idb } from '../utils/indexedDB';
 import { getTodaysDateString } from '../utils/time';
 
 interface TripScreenProps {
@@ -11,19 +12,25 @@ interface TripScreenProps {
     currentTripStartTime: number | null;
     userId: string;
     shopLocationSet: boolean;
+    isOnline: boolean;
 }
 
-const TripScreen: React.FC<TripScreenProps> = ({ isTripActive, toggleTrip, currentTripStartTime, userId, shopLocationSet }) => {
+const TripScreen: React.FC<TripScreenProps> = ({ isTripActive, toggleTrip, currentTripStartTime, userId, shopLocationSet, isOnline }) => {
     const [currentTime, setCurrentTime] = useState(Date.now());
     const [todaysTrips, setTodaysTrips] = useState<TripSession[]>([]);
 
     useEffect(() => {
         const fetchTrips = async () => {
-            const trips = await db.getTripSessions(userId, getTodaysDateString());
-            setTodaysTrips(trips.filter(t => t.endTime).sort((a,b) => b.startTime - a.startTime));
+            const today = getTodaysDateString();
+            const onlineTrips = await db.getTripSessions(userId, today);
+            const pendingTrips = await idb.getAllPendingTrips();
+            const todaysPending = pendingTrips.filter(t => t.date === today && t.endTime);
+            
+            const combined = [...onlineTrips, ...todaysPending];
+            setTodaysTrips(combined.sort((a,b) => b.startTime - a.startTime));
         };
         fetchTrips();
-    }, [userId, isTripActive]);
+    }, [userId, isTripActive, isOnline]);
 
     useEffect(() => {
         if (isTripActive) {
@@ -39,7 +46,14 @@ const TripScreen: React.FC<TripScreenProps> = ({ isTripActive, toggleTrip, curre
     return (
         <div className="flex flex-col h-full space-y-6">
             <div className="text-center bg-white p-6 rounded-xl shadow-lg">
-                <h2 className="text-xl font-semibold text-gray-700 mb-4">Trip Control</h2>
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-semibold text-gray-700">Trip Control</h2>
+                    <div className={`flex items-center text-xs px-2 py-1 rounded-full ${isOnline ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        <span className={`h-2 w-2 rounded-full mr-1 ${isOnline ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
+                        {isOnline ? 'Online' : 'Offline'}
+                    </div>
+                </div>
+
                 {isTripActive && (
                     <div className="mb-4">
                         <div className="text-5xl font-mono font-bold text-gray-800 tracking-wider bg-gray-100 p-4 rounded-lg">
@@ -70,6 +84,7 @@ const TripScreen: React.FC<TripScreenProps> = ({ isTripActive, toggleTrip, curre
                                     <p className="font-medium text-gray-800">
                                         {new Date(trip.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {trip.endTime ? new Date(trip.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                                     </p>
+                                    {trip.isPending && <p className="text-xs text-yellow-600">Pending sync</p>}
                                 </div>
                                 <span className="font-bold text-gray-700">{formatDuration(trip.durationMs || 0)}</span>
                             </li>
