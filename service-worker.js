@@ -2,9 +2,11 @@
 // Using compat libraries for easier use in a non-module service worker environment.
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js');
+importScripts('https://cdn.jsdelivr.net/npm/open-location-code@2.0.0/openlocationcode.min.js');
+
 
 // --- Cache Logic ---
-const CACHE_NAME = 'patel-sons-time-tracker-v2';
+const CACHE_NAME = 'work-hours-tracker-v1';
 const urlsToCache = [
   '/',
   '/index.html',
@@ -80,7 +82,7 @@ function getFirebase() {
 const idb = {
     get(key) {
         return new Promise((resolve) => {
-            const request = indexedDB.open('PatelSonsDB', 1);
+            const request = indexedDB.open('WorkHoursDB', 1);
             request.onsuccess = (event) => {
                 const db = event.target.result;
                 const transaction = db.transaction('userState', 'readonly');
@@ -94,16 +96,24 @@ const idb = {
     }
 };
 
-function getDistance(point1, point2) {
-    const R = 6371e3;
-    const φ1 = point1.lat * Math.PI / 180;
-    const φ2 = point2.lat * Math.PI / 180;
-    const Δφ = (point2.lat - point1.lat) * Math.PI / 180;
-    const Δλ = (point2.lng - point1.lng) * Math.PI / 180;
-    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+function getDistance(plusCode1, plusCode2) {
+    const point1 = OpenLocationCode.decode(plusCode1);
+    const point2 = OpenLocationCode.decode(plusCode2);
+
+    const R = 6371e3; // Earth's radius in metres
+    const φ1 = point1.latitudeCenter * Math.PI / 180;
+    const φ2 = point2.latitudeCenter * Math.PI / 180;
+    const Δφ = (point2.latitudeCenter - point1.latitudeCenter) * Math.PI / 180;
+    const Δλ = (point2.longitudeCenter - point1.longitudeCenter) * Math.PI / 180;
+
+    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
     return R * c;
 }
+
 
 function isWithinWorkingHours(date) {
     const hour = date.getHours();
@@ -118,7 +128,7 @@ function getCurrentLocation() {
     return new Promise((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, {
             enableHighAccuracy: true,
-            timeout: 10000,
+            timeout: 20000,
             maximumAge: 0
         });
     });
@@ -199,9 +209,9 @@ async function handleLocationSync() {
 
     try {
         const position = await getCurrentLocation();
-        const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
+        const currentPlusCode = OpenLocationCode.encode(position.coords.latitude, position.coords.longitude);
         
-        const distance = getDistance(coords, settings.shopLocation);
+        const distance = getDistance(currentPlusCode, settings.shopLocation.plusCode);
         const isInside = distance <= settings.shopLocation.radius;
         const activeSession = await getActiveSession(userId, today);
 

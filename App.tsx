@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
-import { User, UserSettings, LocationCoords, ShopSession, TripSession, TrackingStatus } from './types';
-import { getDistance } from './utils/geolocation';
+import { User, UserSettings, PlusCode, ShopSession, TripSession, TrackingStatus } from './types';
+import { getDistance, encode } from './utils/plusCode';
 import { isWithinWorkingHours, getTodaysDateString } from './utils/time';
 import { db } from './services/firebase';
 import { idb } from './utils/indexedDB';
@@ -19,7 +19,7 @@ const App: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [settings, setSettings] = useState<UserSettings | null>(null);
     const [trackingStatus, setTrackingStatus] = useState<TrackingStatus>(TrackingStatus.IDLE);
-    const [currentPosition, setCurrentPosition] = useState<LocationCoords | null>(null);
+    const [currentPosition, setCurrentPosition] = useState<PlusCode | null>(null);
     
     const [todaysShopTime, setTodaysShopTime] = useState(0);
     const [todaysTripTime, setTodaysTripTime] = useState(0);
@@ -255,7 +255,7 @@ const App: React.FC = () => {
         activeSessionIdRef.current = sessionId;
     }, [user, currentPosition, isOnline]);
 
-    // Core Tracking Logic (unchanged)
+    // Core Tracking Logic
     useEffect(() => {
         if (!user || !settings?.shopLocation || trackingStatus === TrackingStatus.ON_TRIP) {
             if (watchIdRef.current && trackingStatus !== TrackingStatus.ON_TRIP) {
@@ -267,12 +267,14 @@ const App: React.FC = () => {
         const handlePositionUpdate = async (position: GeolocationPosition) => {
             const { latitude, longitude } = position.coords;
             const now = Date.now();
-            const currentPos = { lat: latitude, lng: longitude };
-            setCurrentPosition(currentPos);
+            const currentPC = encode(latitude, longitude);
+            setCurrentPosition(currentPC);
+
             const isWorking = isWithinWorkingHours(new Date(now));
-            const distance = getDistance(currentPos, settings.shopLocation!);
+            const distance = getDistance(currentPC, settings.shopLocation!.plusCode);
             const isInside = distance <= (settings.shopLocation?.radius || 50);
             const currentlyInShop = trackingStatus === TrackingStatus.IN_SHOP;
+
             if (isWorking && isInside && !currentlyInShop) {
                 await endCurrentSession(now);
                 await startNewSession(TrackingStatus.IN_SHOP, now);
@@ -282,7 +284,7 @@ const App: React.FC = () => {
             }
         };
         const handleError = (error: GeolocationPositionError) => console.error("GPS Error:", error.message);
-        watchIdRef.current = navigator.geolocation.watchPosition(handlePositionUpdate, handleError, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+        watchIdRef.current = navigator.geolocation.watchPosition(handlePositionUpdate, handleError, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
         return () => { if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current); };
     }, [user, settings, trackingStatus, endCurrentSession, startNewSession]);
 
@@ -302,7 +304,7 @@ const App: React.FC = () => {
         const now = Date.now();
         if (trackingStatus === TrackingStatus.ON_TRIP) {
             await endCurrentSession(now);
-            const distance = getDistance(currentPosition, settings.shopLocation);
+            const distance = getDistance(currentPosition, settings.shopLocation.plusCode);
             const isInside = distance <= (settings.shopLocation.radius || 50);
             if(isWithinWorkingHours(new Date(now)) && isInside) {
                 await startNewSession(TrackingStatus.IN_SHOP, now);

@@ -1,5 +1,5 @@
 {
-  "name": "patel-sons-time-tracker",
+  "name": "work-hours-tracker",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -12,7 +12,8 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.13.0",
-    "firebase": "^12.8.0"
+    "firebase": "^12.8.0",
+    "open-location-code": "latest"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

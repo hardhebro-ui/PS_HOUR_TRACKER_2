@@ -1,7 +1,7 @@
 
-import { TripSession, LocationCoords } from '../types';
+import { TripSession, PlusCode } from '../types';
 
-const DB_NAME = 'PatelSonsDB';
+const DB_NAME = 'WorkHoursDB';
 const DB_VERSION = 2; // Incremented version for new store
 const USER_STORE = 'userState';
 const TRIP_STORE = 'pendingTrips';
@@ -73,7 +73,7 @@ export const idb = {
         const transaction = db.transaction(TRIP_STORE, 'readwrite');
         transaction.objectStore(TRIP_STORE).clear();
     },
-    async addTripPathPoint(tripId: string, point: LocationCoords): Promise<void> {
+    async addTripPathPoint(tripId: string, point: PlusCode): Promise<void> {
         const db = await getDB();
         const transaction = db.transaction(TRIP_STORE, 'readwrite');
         const store = transaction.objectStore(TRIP_STORE);

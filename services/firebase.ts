@@ -23,7 +23,7 @@ import {
     DocumentData,
     DocumentSnapshot
 } from "firebase/firestore";
-import { User, UserSettings, ShopSession, TripSession, LocationCoords } from '../types';
+import { User, UserSettings, ShopSession, TripSession, PlusCode } from '../types';
 
 // Provided Firebase config
 const firebaseConfig = {
@@ -142,7 +142,7 @@ export const db = {
         await updateDoc(tripRef, updates);
     },
     
-    async addTripPathPoint(userId: string, sessionId: string, point: LocationCoords): Promise<void> {
+    async addTripPathPoint(userId: string, sessionId: string, point: PlusCode): Promise<void> {
         const tripRef = doc(firestore, "users", userId, "trips", sessionId);
         await updateDoc(tripRef, {
             path: arrayUnion(point)

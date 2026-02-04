@@ -43,7 +43,7 @@ const AuthScreen: React.FC = () => {
     return (
         <div className="flex flex-col items-center justify-center h-screen bg-gray-100 p-4">
             <div className="w-full max-w-md bg-white p-8 rounded-2xl shadow-lg">
-                <h1 className="text-3xl font-bold text-center text-gray-800 mb-2">Patel Sons Tracker</h1>
+                <h1 className="text-3xl font-bold text-center text-gray-800 mb-2">Work Hours Tracker</h1>
                 <p className="text-center text-gray-500 mb-8">{isLogin ? 'Welcome back!' : 'Create your account'}</p>
                 
                 {error && <p className="bg-red-100 text-red-700 p-3 rounded-md mb-4 text-sm">{error}</p>}

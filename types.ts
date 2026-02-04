@@ -4,12 +4,10 @@ export interface User {
     name: string;
 }
 
-export interface LocationCoords {
-    lat: number;
-    lng: number;
-}
+export type PlusCode = string;
 
-export interface ShopLocation extends LocationCoords {
+export interface ShopLocation {
+    plusCode: PlusCode;
     radius: number;
 }
 
@@ -32,7 +30,7 @@ export interface TripSession {
     endTime?: number;
     durationMs?: number;
     date: string; // YYYY-MM-DD
-    path: LocationCoords[];
+    path: PlusCode[];
     isPending?: boolean;
 }
 
