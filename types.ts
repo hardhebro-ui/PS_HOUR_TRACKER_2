@@ -44,3 +44,5 @@ export enum TrackingStatus {
     DISABLED = 'DISABLED', // Shop location not set
     OFF_HOURS = 'OFF_HOURS'
 }
+
+export type AppView = 'home' | 'trip' | 'history' | 'settings';

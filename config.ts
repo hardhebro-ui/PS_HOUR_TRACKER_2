@@ -9,6 +9,3 @@ export const firebaseConfig = {
   appId: "1:598253855185:web:0fdea9b673441d9a3000f0",
   measurementId: "G-5QW80BN81E"
 };
-
-// FIX: Export a placeholder googleMapsApiKey to resolve compilation error in the unused utils/mapsLoader.ts file.
-export const googleMapsApiKey = "";

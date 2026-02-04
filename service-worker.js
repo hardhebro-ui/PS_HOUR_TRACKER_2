@@ -1,15 +1,46 @@
-
 // Using compat libraries for easier use in a non-module service worker environment.
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js');
 
 
 // --- Cache Logic ---
-const CACHE_NAME = 'work-hours-tracker-v1';
+const CACHE_NAME = 'work-hours-tracker-v2'; // Bumped version for new cache
 const urlsToCache = [
+  // App Shell
   '/',
   '/index.html',
+  '/manifest.json',
+
+  // App Code
+  '/index.tsx',
+  '/App.tsx',
+  '/types.ts',
+  '/constants.ts',
+  '/config.ts',
+  '/utils/geolocation.ts',
+  '/utils/time.ts',
+  '/utils/indexedDB.ts',
+  '/services/firebase.ts',
+  '/components/AuthScreen.tsx',
+  '/components/BottomNav.tsx',
+  '/components/MapPicker.tsx',
+  '/screens/MainScreen.tsx',
+  
+  // Styles & Assets
   'https://cdn.tailwindcss.com',
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+  'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+
+  // Vendor JS (from importmap)
+  'https://esm.sh/react@19.2.4',
+  'https://esm.sh/react-dom@19.2.4/client',
+  'https://esm.sh/react-router-dom@7.13.0',
+  'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js',
+  'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js',
+  'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js',
+  'https://esm.sh/leaflet@1.9.4'
 ];
 
 self.addEventListener('install', event => {

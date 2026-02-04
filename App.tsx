@@ -1,16 +1,12 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Routes, Route, useNavigate } from 'react-router-dom';
-import { User, UserSettings, LatLng, ShopSession, TripSession, TrackingStatus } from './types';
+import { User, UserSettings, LatLng, ShopSession, TripSession, TrackingStatus, AppView } from './types';
 import { getDistance } from './utils/geolocation';
 import { isWithinWorkingHours, getTodaysDateString } from './utils/time';
 import { db } from './services/firebase';
 import { idb } from './utils/indexedDB';
 import AuthScreen from './components/AuthScreen';
-import HomeScreen from './screens/HomeScreen';
-import TripScreen from './screens/TripScreen';
-import SettingsScreen from './screens/SettingsScreen';
-import HistoryScreen from './screens/HistoryScreen';
+import MainScreen from './screens/MainScreen';
 import BottomNav from './components/BottomNav';
 import { WORK_START_HOUR, WORK_END_HOUR } from './constants';
 
@@ -20,6 +16,7 @@ const App: React.FC = () => {
     const [settings, setSettings] = useState<UserSettings | null>(null);
     const [trackingStatus, setTrackingStatus] = useState<TrackingStatus>(TrackingStatus.IDLE);
     const [currentPosition, setCurrentPosition] = useState<LatLng | null>(null);
+    const [activeView, setActiveView] = useState<AppView>('home');
     
     const [todaysShopTime, setTodaysShopTime] = useState(0);
     const [todaysTripTime, setTodaysTripTime] = useState(0);
@@ -31,7 +28,6 @@ const App: React.FC = () => {
     const watchIdRef = useRef<number | null>(null);
     const tripPathBatchRef = useRef<LatLng[]>([]);
     const tripPathFlushIntervalRef = useRef<number | null>(null);
-    const navigate = useNavigate();
 
     useEffect(() => {
         const handleOnline = () => setIsOnline(true);
@@ -125,7 +121,6 @@ const App: React.FC = () => {
 
         const cleanupIncompleteSessions = async (userId: string) => {
             const todayStr = getTodaysDateString();
-            // These still fetch all, which is acceptable for a one-time cleanup on app start.
             const allShopSessions = await db.getAllShopSessions(userId);
             const allTripSessions = await db.getAllTripSessions(userId);
 
@@ -151,13 +146,13 @@ const App: React.FC = () => {
             await Promise.all(promises);
         };
 
-        const resumeTodaysSession = async (userId: string) => {
+        const resumeTodaysSessionFromDB = async (userId: string) => {
             const today = getTodaysDateString();
             
             const shopSessions = await db.getShopSessions(userId, today);
             const activeShopSession = shopSessions.find(s => !s.endTime);
             if (activeShopSession) {
-                console.log("Resuming active shop session from today.");
+                console.log("Resuming active shop session from DB.");
                 setTrackingStatus(TrackingStatus.IN_SHOP);
                 setCurrentSessionStartTime(activeShopSession.startTime);
                 activeSessionIdRef.current = activeShopSession.id;
@@ -167,7 +162,7 @@ const App: React.FC = () => {
             const tripSessions = await db.getTripSessions(userId, today);
             const activeTripSession = tripSessions.find(t => !t.endTime);
             if (activeTripSession) {
-                console.log("Resuming active trip session from today.");
+                console.log("Resuming active trip session from DB.");
                 setTrackingStatus(TrackingStatus.ON_TRIP);
                 setCurrentSessionStartTime(activeTripSession.startTime);
                 activeSessionIdRef.current = activeTripSession.id;
@@ -176,9 +171,25 @@ const App: React.FC = () => {
         };
 
         const initializeUserSession = async () => {
+            const savedSessionId = localStorage.getItem('activeSessionId');
+            const savedSessionStartTime = localStorage.getItem('activeSessionStartTime');
+            const savedSessionStatus = localStorage.getItem('activeSessionStatus');
+            let sessionResumed = false;
+
+            if (savedSessionId && savedSessionStartTime && savedSessionStatus) {
+                console.log("Resuming session from localStorage.");
+                activeSessionIdRef.current = savedSessionId;
+                setCurrentSessionStartTime(Number(savedSessionStartTime));
+                setTrackingStatus(savedSessionStatus as TrackingStatus);
+                sessionResumed = true;
+            }
+
             await cleanupIncompleteSessions(user.mobile);
             await fetchTodaysTotals(user.mobile);
-            await resumeTodaysSession(user.mobile);
+            
+            if (!sessionResumed) {
+                await resumeTodaysSessionFromDB(user.mobile);
+            }
         };
 
         initializeUserSession();
@@ -186,8 +197,10 @@ const App: React.FC = () => {
 
     const handleLogout = async () => {
         if(watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+        localStorage.removeItem('activeSessionId');
+        localStorage.removeItem('activeSessionStartTime');
+        localStorage.removeItem('activeSessionStatus');
         await db.logoutUser();
-        navigate('/auth');
     };
 
     const updateSettings = (newSettings: UserSettings) => {
@@ -210,11 +223,14 @@ const App: React.FC = () => {
     const endCurrentSession = useCallback(async (endTime: number) => {
         if (!user || !activeSessionIdRef.current || !currentSessionStartTime) return;
 
-        // Flush any remaining points before ending the session
+        localStorage.removeItem('activeSessionId');
+        localStorage.removeItem('activeSessionStartTime');
+        localStorage.removeItem('activeSessionStatus');
+
         await flushTripPathBatch();
 
         const durationMs = endTime - currentSessionStartTime;
-        if (activeSessionIdRef.current.startsWith('offline_')) { // Ending an offline trip
+        if (activeSessionIdRef.current.startsWith('offline_')) {
              const trip = await idb.getPendingTrip(activeSessionIdRef.current);
              if (trip) {
                  trip.endTime = endTime;
@@ -222,11 +238,11 @@ const App: React.FC = () => {
                  await idb.addOrUpdatePendingTrip(trip);
                  setTodaysTripTime(prev => prev + durationMs);
              }
-        } else if (trackingStatus === TrackingStatus.IN_SHOP) { // Ending online shop session
+        } else if (trackingStatus === TrackingStatus.IN_SHOP) {
             const session: Partial<ShopSession> = { endTime, durationMs };
             await db.updateShopSession(user.mobile, activeSessionIdRef.current, session);
             setTodaysShopTime(prev => prev + durationMs);
-        } else if (trackingStatus === TrackingStatus.ON_TRIP) { // Ending online trip session
+        } else if (trackingStatus === TrackingStatus.ON_TRIP) {
             const session: Partial<TripSession> = { endTime, durationMs };
             await db.updateTripSession(user.mobile, activeSessionIdRef.current, session);
             setTodaysTripTime(prev => prev + durationMs);
@@ -251,7 +267,7 @@ const App: React.FC = () => {
         setCurrentSessionStartTime(startTime);
         
         let sessionId: string;
-        if (status === TrackingStatus.ON_TRIP && !isOnline) { // Starting trip OFFLINE
+        if (status === TrackingStatus.ON_TRIP && !isOnline) {
             sessionId = `offline_${startTime}`;
             const newTrip: TripSession = {
                 id: sessionId,
@@ -261,7 +277,7 @@ const App: React.FC = () => {
                 isPending: true,
             };
             await idb.addOrUpdatePendingTrip(newTrip);
-        } else { // Starting any session ONLINE
+        } else {
             if (status === TrackingStatus.IN_SHOP) {
                 const newSession: Omit<ShopSession, 'id'> = { startTime, date: getTodaysDateString() };
                 sessionId = await db.addShopSession(user.mobile, newSession);
@@ -271,9 +287,11 @@ const App: React.FC = () => {
             }
         }
         activeSessionIdRef.current = sessionId;
+        localStorage.setItem('activeSessionId', sessionId);
+        localStorage.setItem('activeSessionStartTime', String(startTime));
+        localStorage.setItem('activeSessionStatus', status);
     }, [user, currentPosition, isOnline]);
 
-    // Core Tracking Logic
     useEffect(() => {
         if (!user || !settings?.shopLocation?.center || trackingStatus === TrackingStatus.ON_TRIP) {
             if (watchIdRef.current && trackingStatus !== TrackingStatus.ON_TRIP) {
@@ -306,15 +324,13 @@ const App: React.FC = () => {
         return () => { if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current); };
     }, [user, settings, trackingStatus, endCurrentSession, startNewSession]);
 
-    // Trip GPS Path recording (Batching)
     useEffect(() => {
         if (trackingStatus === TrackingStatus.ON_TRIP && currentPosition) {
             tripPathBatchRef.current.push(currentPosition);
         }
 
-        // Setup/teardown for the batch flush interval
         if (trackingStatus === TrackingStatus.ON_TRIP && !tripPathFlushIntervalRef.current) {
-            tripPathFlushIntervalRef.current = window.setInterval(flushTripPathBatch, 60 * 1000); // Flush every 60 seconds
+            tripPathFlushIntervalRef.current = window.setInterval(flushTripPathBatch, 60 * 1000);
         } else if (trackingStatus !== TrackingStatus.ON_TRIP && tripPathFlushIntervalRef.current) {
             clearInterval(tripPathFlushIntervalRef.current);
             tripPathFlushIntervalRef.current = null;
@@ -354,17 +370,29 @@ const App: React.FC = () => {
             {user ? (
                 <>
                     <main className="flex-grow overflow-y-auto p-4 pb-20">
-                        <Routes>
-                            <Route path="/" element={<HomeScreen {...{trackingStatus, todaysShopTime, todaysTripTime, currentSessionStartTime, hourlyRate: settings?.hourlyRate || 0, shopLocationSet: !!settings?.shopLocation?.center, endDay}} />} />
-                            <Route path="/trip" element={<TripScreen {...{isTripActive: trackingStatus === TrackingStatus.ON_TRIP, toggleTrip, currentTripStartTime: trackingStatus === TrackingStatus.ON_TRIP ? currentSessionStartTime : null, userId: user.mobile, shopLocationSet: !!settings?.shopLocation?.center, isOnline}} />} />
-                            <Route path="/history" element={<HistoryScreen {...{userId: user.mobile, hourlyRate: settings?.hourlyRate || 0}} />} />
-                            <Route path="/settings" element={<SettingsScreen {...{settings, updateSettings, handleLogout}} />} />
-                        </Routes>
+                        <MainScreen
+                            {...{
+                                activeView,
+                                trackingStatus,
+                                todaysShopTime,
+                                todaysTripTime,
+                                currentSessionStartTime,
+                                hourlyRate: settings?.hourlyRate || 0,
+                                shopLocationSet: !!settings?.shopLocation?.center,
+                                endDay,
+                                toggleTrip,
+                                userId: user.mobile,
+                                isOnline,
+                                settings,
+                                updateSettings,
+                                handleLogout,
+                            }}
+                        />
                     </main>
-                    <BottomNav />
+                    <BottomNav activeView={activeView} setActiveView={setActiveView} />
                 </>
             ) : (
-                <Routes><Route path="*" element={<AuthScreen />} /></Routes>
+                <AuthScreen />
             )}
         </div>
     );
