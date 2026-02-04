@@ -27,7 +27,7 @@ export const loadGoogleMapsScript = (): Promise<void> => {
         };
 
         const script = document.createElement('script');
-        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&callback=${GOOGLE_MAPS_CALLBACK_NAME}`;
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&callback=${GOOGLE_MAPS_CALLBACK_NAME}`;
         script.async = true;
         script.defer = true;
         
