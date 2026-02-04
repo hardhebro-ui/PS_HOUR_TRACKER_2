@@ -1,4 +1,6 @@
 
+import { Timestamp } from 'firebase/firestore';
+
 export interface User {
     mobile: string;
     name: string;
@@ -21,20 +23,27 @@ export interface UserSettings {
 
 export interface ShopSession {
     id: string;
-    startTime: number;
-    endTime?: number;
+    startTime: Timestamp;
+    endTime?: Timestamp;
     durationMs?: number;
     date: string; // YYYY-MM-DD
 }
 
 export interface TripSession {
     id: string;
-    startTime: number;
-    endTime?: number;
+    startTime: Timestamp;
+    endTime?: Timestamp;
     durationMs?: number;
     date: string; // YYYY-MM-DD
     path: LatLng[];
     isPending?: boolean;
+}
+
+export interface DailySummary {
+    date: string; // YYYY-MM-DD
+    shopTime: number; // in milliseconds
+    tripTime: number; // in milliseconds
+    totalTime: number; // in milliseconds
 }
 
 export enum TrackingStatus {

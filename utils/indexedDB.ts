@@ -1,10 +1,11 @@
 
-import { TripSession, LatLng } from '../types';
+import { TripSession, LatLng, ShopSession } from '../types';
 
 const DB_NAME = 'WorkHoursDB';
-const DB_VERSION = 2; // Incremented version for new store
+const DB_VERSION = 3; // Incremented version for new store
 const USER_STORE = 'userState';
 const TRIP_STORE = 'pendingTrips';
+const HISTORY_STORE = 'history_sessions';
 
 let db: IDBDatabase;
 
@@ -25,6 +26,9 @@ function getDB(): Promise<IDBDatabase> {
             }
             if (!dbInstance.objectStoreNames.contains(TRIP_STORE)) {
                 dbInstance.createObjectStore(TRIP_STORE, { keyPath: 'id' });
+            }
+            if (!dbInstance.objectStoreNames.contains(HISTORY_STORE)) {
+                dbInstance.createObjectStore(HISTORY_STORE, { keyPath: 'id' });
             }
         };
     });
@@ -85,5 +89,23 @@ export const idb = {
                 store.put(trip);
             }
         };
-    }
+    },
+    // --- History Caching ---
+    async getAllHistory(): Promise<(ShopSession | TripSession)[]> {
+        const db = await getDB();
+        return new Promise(resolve => {
+            const transaction = db.transaction(HISTORY_STORE, 'readonly');
+            const request = transaction.objectStore(HISTORY_STORE).getAll();
+            request.onsuccess = () => resolve(request.result || []);
+            request.onerror = () => resolve([]);
+        });
+    },
+    async cacheHistory(sessions: (ShopSession | TripSession)[]): Promise<void> {
+        const db = await getDB();
+        const transaction = db.transaction(HISTORY_STORE, 'readwrite');
+        const store = transaction.objectStore(HISTORY_STORE);
+        sessions.forEach(session => {
+            store.put(session);
+        });
+    },
 };

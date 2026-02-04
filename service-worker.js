@@ -248,13 +248,20 @@ async function handleLocationSync() {
 
         if (isWorking) {
             if (isInside && !activeSession) {
+                console.log('[SW] Condition: Working hours, inside, no active session. Starting new session.');
                 await startNewSession(userId, nowMs);
             } else if (!isInside && activeSession) {
+                console.log('[SW] Condition: Working hours, outside, active session exists. Ending session.');
                 await endSession(userId, activeSession.id, nowMs);
+            } else {
+                console.log('[SW] Condition: No change in state needed during working hours.');
             }
         } else {
             if (activeSession) {
+                console.log('[SW] Condition: Outside working hours, active session exists. Ending session.');
                 await endSession(userId, activeSession.id, nowMs);
+            } else {
+                 console.log('[SW] Condition: Outside working hours, no active session. Nothing to do.');
             }
         }
         console.log('[SW] Sync complete.');

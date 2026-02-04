@@ -25,9 +25,12 @@ import {
     orderBy,
     limit,
     startAfter,
-    Query
+    Query,
+    serverTimestamp,
+    Timestamp,
+    increment
 } from "firebase/firestore";
-import { User, UserSettings, ShopSession, TripSession, LatLng } from '../types';
+import { User, UserSettings, ShopSession, TripSession, LatLng, DailySummary } from '../types';
 import { firebaseConfig } from "../config";
 
 // Initialize Firebase
@@ -37,7 +40,14 @@ const auth = getAuth(app);
 
 // Helper to convert a Firestore doc into a typed object with its ID
 const fromDoc = <T>(doc: DocumentSnapshot<DocumentData>): T => {
-    return { ...doc.data(), id: doc.id } as T;
+    const data = doc.data();
+    // Convert Firestore Timestamps to JS Timestamps for easier use, then to numbers
+    for (const key in data) {
+        if (data[key] instanceof Timestamp) {
+            data[key] = data[key];
+        }
+    }
+    return { ...data, id: doc.id } as T;
 };
 
 // New Auth types
@@ -54,14 +64,10 @@ interface LoginCredentials {
 
 export const db = {
     async registerUser({ name, mobile, password }: RegisterCredentials): Promise<FirebaseUser> {
-        // Use mobile number as a unique ID for email/password auth
         const fakeEmail = `${mobile}@pstracker.app`;
         const userCredential = await createUserWithEmailAndPassword(auth, fakeEmail, password);
-        
-        // Create user profile in Firestore
         const userRef = doc(firestore, "users", mobile);
         await setDoc(userRef, { name, mobile });
-
         return userCredential.user;
     },
 
@@ -79,15 +85,10 @@ export const db = {
         return onAuthStateChanged(auth, callback);
     },
     
-    // --- Firestore Methods ---
-    
     async getUser(mobile: string): Promise<User | null> {
         const docRef = doc(firestore, "users", mobile);
         const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-            return { mobile, ...docSnap.data() } as User;
-        }
-        return null;
+        return docSnap.exists() ? { mobile, ...docSnap.data() } as User : null;
     },
 
     async saveSettings(userId: string, settings: UserSettings): Promise<void> {
@@ -100,63 +101,120 @@ export const db = {
         const docSnap = await getDoc(docRef);
         return docSnap.exists() ? docSnap.data() as UserSettings : null;
     },
+    
+    // --- Event-based Session Management ---
 
-    async addShopSession(userId: string, session: Omit<ShopSession, 'id'>): Promise<string> {
+    async addShopSession(userId: string, date: string): Promise<string> {
         const sessionsCollectionRef = collection(firestore, "users", userId, "shop_sessions");
-        const docRef = await addDoc(sessionsCollectionRef, session);
+        const docRef = await addDoc(sessionsCollectionRef, { startTime: serverTimestamp(), date });
         return docRef.id;
     },
+
+    async endShopSession(userId: string, sessionId: string): Promise<number> {
+        const sessionRef = doc(firestore, "users", userId, "shop_sessions", sessionId);
+        await updateDoc(sessionRef, { endTime: serverTimestamp() });
+
+        const updatedDoc = await getDoc(sessionRef);
+        const session = fromDoc<ShopSession>(updatedDoc);
+        const durationMs = session.endTime!.toMillis() - session.startTime.toMillis();
+        await updateDoc(sessionRef, { durationMs });
+        return durationMs;
+    },
+
+    async addTripSession(userId: string, date: string, startPosition: LatLng | null): Promise<string> {
+        const tripsCollectionRef = collection(firestore, "users", userId, "trips");
+        const docRef = await addDoc(tripsCollectionRef, { 
+            startTime: serverTimestamp(), 
+            date,
+            path: startPosition ? [startPosition] : []
+        });
+        return docRef.id;
+    },
+
+    async endTripSession(userId: string, sessionId: string): Promise<number> {
+        const tripRef = doc(firestore, "users", userId, "trips", sessionId);
+        await updateDoc(tripRef, { endTime: serverTimestamp() });
+
+        const updatedDoc = await getDoc(tripRef);
+        const session = fromDoc<TripSession>(updatedDoc);
+        const durationMs = session.endTime!.toMillis() - session.startTime.toMillis();
+        await updateDoc(tripRef, { durationMs });
+        return durationMs;
+    },
+
+    async getOpenSessionForToday(userId: string, date: string): Promise<ShopSession | TripSession | null> {
+        const shopSessionsRef = collection(firestore, "users", userId, "shop_sessions");
+        const qShop = query(shopSessionsRef, where("date", "==", date), where("endTime", "==", null));
+        const shopSnapshot = await getDocs(qShop);
+        if (!shopSnapshot.empty) return { ...fromDoc<ShopSession>(shopSnapshot.docs[0]), type: 'IN_SHOP' } as any;
+
+        const tripSessionsRef = collection(firestore, "users", userId, "trips");
+        const qTrip = query(tripSessionsRef, where("date", "==", date), where("endTime", "==", null));
+        const tripSnapshot = await getDocs(qTrip);
+        if (!tripSnapshot.empty) return { ...fromDoc<TripSession>(tripSnapshot.docs[0]), type: 'ON_TRIP' } as any;
+
+        return null;
+    },
+    
+    // --- Daily Summary Management (New) ---
+
+    async getDailySummary(userId: string, date: string): Promise<DailySummary> {
+        const summaryRef = doc(firestore, "users", userId, "daily_summaries", date);
+        const docSnap = await getDoc(summaryRef);
+        if (docSnap.exists()) {
+            return docSnap.data() as DailySummary;
+        }
+        return { date, shopTime: 0, tripTime: 0, totalTime: 0 };
+    },
+
+    async updateDailySummary(userId: string, date: string, durationMs: number, type: 'shop' | 'trip'): Promise<void> {
+        const summaryRef = doc(firestore, "users", userId, "daily_summaries", date);
+        const fieldToUpdate = type === 'shop' ? 'shopTime' : 'tripTime';
+        await setDoc(summaryRef, {
+            date,
+            [fieldToUpdate]: increment(durationMs),
+            totalTime: increment(durationMs)
+        }, { merge: true });
+    },
+
+    // --- Legacy and Utility Functions ---
 
     async updateShopSession(userId: string, sessionId: string, updates: Partial<ShopSession>): Promise<void> {
         const sessionRef = doc(firestore, "users", userId, "shop_sessions", sessionId);
         await updateDoc(sessionRef, updates);
     },
-
+    async updateTripSession(userId: string, sessionId: string, updates: Partial<TripSession>): Promise<void> {
+        const tripRef = doc(firestore, "users", userId, "trips", sessionId);
+        await updateDoc(tripRef, updates);
+    },
     async getShopSessions(userId: string, date: string): Promise<ShopSession[]> {
         const sessionsCollectionRef = collection(firestore, "users", userId, "shop_sessions");
         const q = query(sessionsCollectionRef, where("date", "==", date));
         const querySnapshot = await getDocs(q);
         return querySnapshot.docs.map(doc => fromDoc<ShopSession>(doc));
     },
-    
-    async getAllShopSessions(userId: string): Promise<ShopSession[]> {
-        const sessionsCollectionRef = collection(firestore, "users", userId, "shop_sessions");
-        const querySnapshot = await getDocs(sessionsCollectionRef);
-        return querySnapshot.docs.map(doc => fromDoc<ShopSession>(doc));
-    },
-
-    async addTripSession(userId: string, session: Omit<TripSession, 'id'>): Promise<string> {
-        const tripsCollectionRef = collection(firestore, "users", userId, "trips");
-        const docRef = await addDoc(tripsCollectionRef, session);
-        return docRef.id;
-    },
-
-    async updateTripSession(userId: string, sessionId: string, updates: Partial<TripSession>): Promise<void> {
-        const tripRef = doc(firestore, "users", userId, "trips", sessionId);
-        await updateDoc(tripRef, updates);
-    },
-    
-    async addTripPathPoints(userId: string, sessionId: string, points: LatLng[]): Promise<void> {
-        const tripRef = doc(firestore, "users", userId, "trips", sessionId);
-        await updateDoc(tripRef, {
-            path: arrayUnion(...points)
-        });
-    },
-
     async getTripSessions(userId: string, date: string): Promise<TripSession[]> {
         const tripsCollectionRef = collection(firestore, "users", userId, "trips");
         const q = query(tripsCollectionRef, where("date", "==", date));
         const querySnapshot = await getDocs(q);
         return querySnapshot.docs.map(doc => fromDoc<TripSession>(doc));
     },
-
+     async addTripPathPoints(userId: string, sessionId: string, points: LatLng[]): Promise<void> {
+        const tripRef = doc(firestore, "users", userId, "trips", sessionId);
+        await updateDoc(tripRef, {
+            path: arrayUnion(...points)
+        });
+    },
+    async getAllShopSessions(userId: string): Promise<ShopSession[]> {
+        const sessionsCollectionRef = collection(firestore, "users", userId, "shop_sessions");
+        const querySnapshot = await getDocs(sessionsCollectionRef);
+        return querySnapshot.docs.map(doc => fromDoc<ShopSession>(doc));
+    },
     async getAllTripSessions(userId: string): Promise<TripSession[]> {
         const tripsCollectionRef = collection(firestore, "users", userId, "trips");
         const querySnapshot = await getDocs(tripsCollectionRef);
         return querySnapshot.docs.map(doc => fromDoc<TripSession>(doc));
     },
-
-    // --- PAGINATED HISTORY ---
     async getPaginatedShopSessions(userId: string, limitCount: number, startAfterDoc?: DocumentSnapshot) {
         const sessionsCollectionRef = collection(firestore, "users", userId, "shop_sessions");
         let q: Query;
@@ -170,7 +228,6 @@ export const db = {
         const lastDoc = querySnapshot.docs[querySnapshot.docs.length - 1];
         return { sessions, lastDoc };
     },
-
     async getPaginatedTripSessions(userId: string, limitCount: number, startAfterDoc?: DocumentSnapshot) {
         const tripsCollectionRef = collection(firestore, "users", userId, "trips");
         let q: Query;

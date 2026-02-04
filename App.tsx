@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { User, UserSettings, LatLng, ShopSession, TripSession, TrackingStatus, AppView } from './types';
+import { User, UserSettings, LatLng, ShopSession, TripSession, TrackingStatus, AppView, DailySummary } from './types';
 import { getDistance } from './utils/geolocation';
 import { isWithinWorkingHours, getTodaysDateString } from './utils/time';
 import { db } from './services/firebase';
@@ -9,6 +9,9 @@ import AuthScreen from './components/AuthScreen';
 import MainScreen from './screens/MainScreen';
 import BottomNav from './components/BottomNav';
 import { WORK_START_HOUR, WORK_END_HOUR } from './constants';
+import { Timestamp } from 'firebase/firestore';
+
+const getMillis = (ts: Timestamp | number): number => typeof ts === 'number' ? ts : ts.toMillis();
 
 const App: React.FC = () => {
     const [user, setUser] = useState<User | null>(null);
@@ -18,13 +21,14 @@ const App: React.FC = () => {
     const [currentPosition, setCurrentPosition] = useState<LatLng | null>(null);
     const [activeView, setActiveView] = useState<AppView>('home');
     
-    const [todaysShopTime, setTodaysShopTime] = useState(0);
-    const [todaysTripTime, setTodaysTripTime] = useState(0);
+    // State now driven by daily summary for efficiency
+    const [dailySummary, setDailySummary] = useState<DailySummary>({ date: getTodaysDateString(), shopTime: 0, tripTime: 0, totalTime: 0 });
+    const [todaysSessions, setTodaysSessions] = useState<(ShopSession | TripSession)[]>([]);
     const [currentSessionStartTime, setCurrentSessionStartTime] = useState<number | null>(null);
 
     const [isOnline, setIsOnline] = useState(navigator.onLine);
 
-    const activeSessionIdRef = useRef<string | null>(null);
+    const activeSessionRef = useRef<{ id: string; type: 'IN_SHOP' | 'ON_TRIP' } | null>(null);
     const watchIdRef = useRef<number | null>(null);
     const tripPathBatchRef = useRef<LatLng[]>([]);
     const tripPathFlushIntervalRef = useRef<number | null>(null);
@@ -39,167 +43,102 @@ const App: React.FC = () => {
             window.removeEventListener('offline', handleOffline);
         };
     }, []);
+    
+    const fetchTodaysData = useCallback(async (userId: string) => {
+        const today = getTodaysDateString();
+        // Fetch the efficient daily summary
+        const summary = await db.getDailySummary(userId, today);
+        setDailySummary(summary);
+        
+        // Fetch full sessions for the activity log
+        const shopSessions = await db.getShopSessions(userId, today);
+        const tripSessions = await db.getTripSessions(userId, today);
+        const pendingTrips = await idb.getAllPendingTrips();
+        
+        const allTodaysSessions = [
+            ...shopSessions.filter(s => s.endTime), 
+            ...tripSessions.filter(t => t.endTime),
+            ...pendingTrips.filter(t => t.date === today && t.endTime)
+        ].sort((a, b) => getMillis(b.startTime) - getMillis(a.startTime));
+        setTodaysSessions(allTodaysSessions);
+    }, []);
 
     const syncOfflineData = useCallback(async (userId: string) => {
+        // This function would be expanded to handle offline-created shop sessions if needed
         const pendingTrips = await idb.getAllPendingTrips();
         if (pendingTrips.length === 0) return;
 
         console.log(`Syncing ${pendingTrips.length} offline trips...`);
         try {
-            const syncPromises = pendingTrips.map(trip => db.addTripSession(userId, trip));
-            await Promise.all(syncPromises);
+            for (const trip of pendingTrips) {
+                const session: Omit<TripSession, 'id'> = { ...trip, startTime: new Timestamp(trip.startTime as any / 1000, 0), endTime: new Timestamp(trip.endTime as any / 1000, 0) };
+                const newId = await db.addTripSession(userId, session.date, null); // startTime is tricky here
+                await db.updateTripSession(userId, newId, session);
+                await db.updateDailySummary(userId, trip.date, trip.durationMs!, 'trip');
+            }
             await idb.clearPendingTrips();
             console.log('Offline trips synced successfully.');
-            fetchTodaysTotals(userId); // Refresh totals after sync
+            fetchTodaysData(userId);
         } catch (error) {
             console.error("Failed to sync offline trips:", error);
         }
-    }, []);
+    }, [fetchTodaysData]);
 
     useEffect(() => {
-        if (isOnline && user) {
-            syncOfflineData(user.mobile);
-        }
-    }, [isOnline, user, syncOfflineData]);
-
-    useEffect(() => {
-        const registerPeriodicSync = async () => {
-            const registration = await navigator.serviceWorker.ready;
-            try { // @ts-ignore
-                await registration.periodicSync.register('location-sync', { minInterval: 15 * 60 * 1000 });
-                console.log('Periodic sync registered');
-            } catch (e) { console.error('Periodic sync could not be registered:', e); }
-        };
-        const unregisterPeriodicSync = async () => {
-            const registration = await navigator.serviceWorker.ready;
-            try { // @ts-ignore
-                await registration.periodicSync.unregister('location-sync');
-                console.log('Periodic sync unregistered');
-            } catch(e) { console.error('Periodic sync could not be unregistered', e); }
-        };
-
         const unsubscribe = db.onAuthChange(async (firebaseUser) => {
             if (firebaseUser && firebaseUser.email) {
                 const mobile = firebaseUser.email.split('@')[0];
                 const appUser = await db.getUser(mobile);
                 if(appUser){
                     setUser(appUser);
-                    await idb.set('userId', appUser.mobile);
-                    registerPeriodicSync();
-                    if (navigator.onLine) syncOfflineData(appUser.mobile); // Sync on login
                     const userSettings = await db.getSettings(appUser.mobile);
                     setSettings(userSettings);
+                    if (navigator.onLine) await syncOfflineData(appUser.mobile);
                 }
             } else {
                 setUser(null);
                 setSettings(null);
-                await idb.set('userId', null);
-                unregisterPeriodicSync();
-                localStorage.removeItem('userId');
             }
             setLoading(false);
         });
         return () => unsubscribe();
     }, [syncOfflineData]);
-
-    const fetchTodaysTotals = useCallback(async (userId: string) => {
-        const today = getTodaysDateString();
-        const shopSessions = await db.getShopSessions(userId, today);
-        const tripSessions = await db.getTripSessions(userId, today);
-        const pendingTrips = await idb.getAllPendingTrips();
-
-        const totalShop = shopSessions.reduce((acc, s) => acc + (s.durationMs || 0), 0);
-        const totalTrip = tripSessions.reduce((acc, t) => acc + (t.durationMs || 0), 0);
-        const pendingTripTime = pendingTrips.filter(t => t.date === today && t.endTime).reduce((acc, t) => acc + (t.durationMs || 0), 0);
-        
-        setTodaysShopTime(totalShop);
-        setTodaysTripTime(totalTrip + pendingTripTime);
-    }, []);
     
+    // Main state recovery and initialization logic
     useEffect(() => {
         if (!user) return;
 
-        const cleanupIncompleteSessions = async (userId: string) => {
-            const todayStr = getTodaysDateString();
-            const allShopSessions = await db.getAllShopSessions(userId);
-            const allTripSessions = await db.getAllTripSessions(userId);
-
-            const incompleteSessions = [
-                ...allShopSessions.filter(s => !s.endTime && s.date < todayStr),
-                ...allTripSessions.filter(t => !t.endTime && t.date < todayStr)
-            ];
-
-            if (incompleteSessions.length === 0) return;
-            console.log(`Cleaning up ${incompleteSessions.length} incomplete sessions from previous days...`);
-
-            const promises = incompleteSessions.map(session => {
-                const sessionDate = new Date(session.startTime);
-                sessionDate.setHours(WORK_END_HOUR, 0, 0, 0);
-                const endTime = sessionDate.getTime();
-                const durationMs = Math.max(0, endTime - session.startTime);
-                const updates = { endTime, durationMs };
-                if ('path' in session) {
-                    return db.updateTripSession(userId, session.id, updates);
-                }
-                return db.updateShopSession(userId, session.id, updates);
-            });
-            await Promise.all(promises);
-        };
-
-        const resumeTodaysSessionFromDB = async (userId: string) => {
-            const today = getTodaysDateString();
-            
-            const shopSessions = await db.getShopSessions(userId, today);
-            const activeShopSession = shopSessions.find(s => !s.endTime);
-            if (activeShopSession) {
-                console.log("Resuming active shop session from DB.");
-                setTrackingStatus(TrackingStatus.IN_SHOP);
-                setCurrentSessionStartTime(activeShopSession.startTime);
-                activeSessionIdRef.current = activeShopSession.id;
-                return;
-            }
-
-            const tripSessions = await db.getTripSessions(userId, today);
-            const activeTripSession = tripSessions.find(t => !t.endTime);
-            if (activeTripSession) {
-                console.log("Resuming active trip session from DB.");
-                setTrackingStatus(TrackingStatus.ON_TRIP);
-                setCurrentSessionStartTime(activeTripSession.startTime);
-                activeSessionIdRef.current = activeTripSession.id;
-                return;
-            }
-        };
-
         const initializeUserSession = async () => {
-            const savedSessionId = localStorage.getItem('activeSessionId');
-            const savedSessionStartTime = localStorage.getItem('activeSessionStartTime');
-            const savedSessionStatus = localStorage.getItem('activeSessionStatus');
-            let sessionResumed = false;
-
-            if (savedSessionId && savedSessionStartTime && savedSessionStatus) {
-                console.log("Resuming session from localStorage.");
-                activeSessionIdRef.current = savedSessionId;
-                setCurrentSessionStartTime(Number(savedSessionStartTime));
-                setTrackingStatus(savedSessionStatus as TrackingStatus);
-                sessionResumed = true;
-            }
-
-            await cleanupIncompleteSessions(user.mobile);
-            await fetchTodaysTotals(user.mobile);
+            const today = getTodaysDateString();
+            await fetchTodaysData(user.mobile);
             
-            if (!sessionResumed) {
-                await resumeTodaysSessionFromDB(user.mobile);
+            // Check for an open session from today
+            const openSession = await db.getOpenSessionForToday(user.mobile, today);
+
+            if (openSession) {
+                console.log("Resuming active session from DB:", openSession);
+                const status = (openSession as any).type as 'IN_SHOP' | 'ON_TRIP';
+                activeSessionRef.current = { id: openSession.id, type: status };
+                setCurrentSessionStartTime(openSession.startTime.toMillis());
+                setTrackingStatus(TrackingStatus[status]);
+
+                // Auto-end session if it's past working hours
+                if (!isWithinWorkingHours(new Date())) {
+                    endCurrentSession();
+                }
+            } else {
+                 setTrackingStatus(TrackingStatus.IDLE);
+                 setCurrentSessionStartTime(null);
+                 activeSessionRef.current = null;
             }
         };
 
         initializeUserSession();
-    }, [user, fetchTodaysTotals]);
+    }, [user, fetchTodaysData]);
 
     const handleLogout = async () => {
         if(watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
-        localStorage.removeItem('activeSessionId');
-        localStorage.removeItem('activeSessionStartTime');
-        localStorage.removeItem('activeSessionStatus');
+        await endCurrentSession();
         await db.logoutUser();
     };
 
@@ -208,156 +147,110 @@ const App: React.FC = () => {
         if (user) db.saveSettings(user.mobile, newSettings);
     };
 
-    const flushTripPathBatch = useCallback(async () => {
-        if (!user || !activeSessionIdRef.current || tripPathBatchRef.current.length === 0) return;
-
-        console.log(`Flushing ${tripPathBatchRef.current.length} points to trip ${activeSessionIdRef.current}`);
-        if (activeSessionIdRef.current.startsWith('offline_')) {
-             await idb.addTripPathPoints(activeSessionIdRef.current, tripPathBatchRef.current);
-        } else {
-             await db.addTripPathPoints(user.mobile, activeSessionIdRef.current, tripPathBatchRef.current);
-        }
-        tripPathBatchRef.current = [];
-    }, [user]);
-
-    const endCurrentSession = useCallback(async (endTime: number) => {
-        if (!user || !activeSessionIdRef.current || !currentSessionStartTime) return;
-
-        localStorage.removeItem('activeSessionId');
-        localStorage.removeItem('activeSessionStartTime');
-        localStorage.removeItem('activeSessionStatus');
-
-        await flushTripPathBatch();
-
-        const durationMs = endTime - currentSessionStartTime;
-        if (activeSessionIdRef.current.startsWith('offline_')) {
-             const trip = await idb.getPendingTrip(activeSessionIdRef.current);
-             if (trip) {
-                 trip.endTime = endTime;
-                 trip.durationMs = durationMs;
-                 await idb.addOrUpdatePendingTrip(trip);
-                 setTodaysTripTime(prev => prev + durationMs);
-             }
-        } else if (trackingStatus === TrackingStatus.IN_SHOP) {
-            const session: Partial<ShopSession> = { endTime, durationMs };
-            await db.updateShopSession(user.mobile, activeSessionIdRef.current, session);
-            setTodaysShopTime(prev => prev + durationMs);
-        } else if (trackingStatus === TrackingStatus.ON_TRIP) {
-            const session: Partial<TripSession> = { endTime, durationMs };
-            await db.updateTripSession(user.mobile, activeSessionIdRef.current, session);
-            setTodaysTripTime(prev => prev + durationMs);
-        }
-
-        activeSessionIdRef.current = null;
-        setCurrentSessionStartTime(null);
-    }, [user, trackingStatus, currentSessionStartTime, flushTripPathBatch]);
-
-    const endDay = async () => {
-        const isActive = trackingStatus === TrackingStatus.IN_SHOP || trackingStatus === TrackingStatus.ON_TRIP;
-        if (isActive) {
-            await endCurrentSession(Date.now());
-            setTrackingStatus(TrackingStatus.IDLE);
-        }
-    };
-
-    const startNewSession = useCallback(async (status: TrackingStatus.IN_SHOP | TrackingStatus.ON_TRIP, startTime: number) => {
-        if (!user) return;
+    const endCurrentSession = useCallback(async () => {
+        if (!user || !activeSessionRef.current) return;
         
-        setTrackingStatus(status);
-        setCurrentSessionStartTime(startTime);
-        
-        let sessionId: string;
-        if (status === TrackingStatus.ON_TRIP && !isOnline) {
-            sessionId = `offline_${startTime}`;
-            const newTrip: TripSession = {
-                id: sessionId,
-                startTime,
-                date: getTodaysDateString(),
-                path: currentPosition ? [currentPosition] : [],
-                isPending: true,
-            };
-            await idb.addOrUpdatePendingTrip(newTrip);
-        } else {
-            if (status === TrackingStatus.IN_SHOP) {
-                const newSession: Omit<ShopSession, 'id'> = { startTime, date: getTodaysDateString() };
-                sessionId = await db.addShopSession(user.mobile, newSession);
-            } else {
-                const newSession: Omit<TripSession, 'id'> = { startTime, date: getTodaysDateString(), path: currentPosition ? [currentPosition] : [] };
-                sessionId = await db.addTripSession(user.mobile, newSession);
+        console.log('Ending session:', activeSessionRef.current.id);
+        const { id, type } = activeSessionRef.current;
+        let durationMs = 0;
+
+        try {
+            if (type === 'IN_SHOP') {
+                durationMs = await db.endShopSession(user.mobile, id);
+                await db.updateDailySummary(user.mobile, getTodaysDateString(), durationMs, 'shop');
+            } else if (type === 'ON_TRIP') {
+                durationMs = await db.endTripSession(user.mobile, id);
+                await db.updateDailySummary(user.mobile, getTodaysDateString(), durationMs, 'trip');
             }
+        } catch (error) {
+            console.error("Failed to end session:", error);
         }
-        activeSessionIdRef.current = sessionId;
-        localStorage.setItem('activeSessionId', sessionId);
-        localStorage.setItem('activeSessionStartTime', String(startTime));
-        localStorage.setItem('activeSessionStatus', status);
-    }, [user, currentPosition, isOnline]);
 
+        activeSessionRef.current = null;
+        setCurrentSessionStartTime(null);
+        setTrackingStatus(TrackingStatus.IDLE);
+        await fetchTodaysData(user.mobile); // Refresh data
+    }, [user, fetchTodaysData]);
+
+    const startNewSession = useCallback(async (status: TrackingStatus.IN_SHOP | TrackingStatus.ON_TRIP) => {
+        if (!user || activeSessionRef.current) return;
+
+        const today = getTodaysDateString();
+        console.log(`Starting new ${status} session.`);
+
+        try {
+            let sessionId: string;
+            if (status === TrackingStatus.IN_SHOP) {
+                sessionId = await db.addShopSession(user.mobile, today);
+            } else { // ON_TRIP
+                sessionId = await db.addTripSession(user.mobile, today, currentPosition);
+            }
+            // After starting, immediately fetch the new state from the DB to get server timestamp
+            const openSession = await db.getOpenSessionForToday(user.mobile, today);
+            if (openSession) {
+                activeSessionRef.current = { id: openSession.id, type: status };
+                setCurrentSessionStartTime(openSession.startTime.toMillis());
+                setTrackingStatus(status);
+            }
+        } catch (error) {
+            console.error("Failed to start new session:", error);
+        }
+    }, [user, currentPosition]);
+
+    // GPS tracking effect
     useEffect(() => {
         if (!user || !settings?.shopLocation?.center || trackingStatus === TrackingStatus.ON_TRIP) {
-            if (watchIdRef.current && trackingStatus !== TrackingStatus.ON_TRIP) {
+            if (watchIdRef.current) {
                 navigator.geolocation.clearWatch(watchIdRef.current);
                 watchIdRef.current = null;
             }
             return;
         }
-        const handlePositionUpdate = async (position: GeolocationPosition) => {
+
+        const handlePositionUpdate = (position: GeolocationPosition) => {
             const { latitude, longitude } = position.coords;
-            const now = Date.now();
             const currentPos = { lat: latitude, lng: longitude };
             setCurrentPosition(currentPos);
 
-            const isWorking = isWithinWorkingHours(new Date(now));
+            if (!isWithinWorkingHours(new Date())) {
+                if (activeSessionRef.current) endCurrentSession();
+                return;
+            }
+
             const distance = getDistance(currentPos, settings.shopLocation!.center);
             const isInside = distance <= (settings.shopLocation?.radius || 50);
-            const currentlyInShop = trackingStatus === TrackingStatus.IN_SHOP;
+            const isInShopSession = activeSessionRef.current?.type === 'IN_SHOP';
 
-            if (isWorking && isInside && !currentlyInShop) {
-                await endCurrentSession(now);
-                await startNewSession(TrackingStatus.IN_SHOP, now);
-            } else if ((!isWorking || !isInside) && currentlyInShop) {
-                await endCurrentSession(now);
-                setTrackingStatus(TrackingStatus.IDLE);
+            if (isInside && !isInShopSession) {
+                startNewSession(TrackingStatus.IN_SHOP);
+            } else if (!isInside && isInShopSession) {
+                endCurrentSession();
             }
         };
         const handleError = (error: GeolocationPositionError) => console.error("GPS Error:", error.message);
+        
         watchIdRef.current = navigator.geolocation.watchPosition(handlePositionUpdate, handleError, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+        
         return () => { if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current); };
     }, [user, settings, trackingStatus, endCurrentSession, startNewSession]);
 
-    useEffect(() => {
-        if (trackingStatus === TrackingStatus.ON_TRIP && currentPosition) {
-            tripPathBatchRef.current.push(currentPosition);
-        }
-
-        if (trackingStatus === TrackingStatus.ON_TRIP && !tripPathFlushIntervalRef.current) {
-            tripPathFlushIntervalRef.current = window.setInterval(flushTripPathBatch, 60 * 1000);
-        } else if (trackingStatus !== TrackingStatus.ON_TRIP && tripPathFlushIntervalRef.current) {
-            clearInterval(tripPathFlushIntervalRef.current);
-            tripPathFlushIntervalRef.current = null;
-        }
-
-        return () => {
-            if (tripPathFlushIntervalRef.current) {
-                clearInterval(tripPathFlushIntervalRef.current);
-            }
-        };
-    }, [currentPosition, trackingStatus, flushTripPathBatch]);
 
     const toggleTrip = async () => {
-        if (!user || !settings?.shopLocation?.center || !currentPosition) return;
-        const now = Date.now();
-        if (trackingStatus === TrackingStatus.ON_TRIP) {
-            await endCurrentSession(now);
-            const distance = getDistance(currentPosition, settings.shopLocation.center);
-            const isInside = distance <= (settings.shopLocation.radius || 50);
-            if(isWithinWorkingHours(new Date(now)) && isInside) {
-                await startNewSession(TrackingStatus.IN_SHOP, now);
-            } else {
-                setTrackingStatus(TrackingStatus.IDLE);
+        if (!user || !settings?.shopLocation?.center) return;
+        
+        if (activeSessionRef.current?.type === 'ON_TRIP') {
+            await endCurrentSession();
+            // Check if we are now inside the shop to start a shop session
+            if (currentPosition) {
+                const distance = getDistance(currentPosition, settings.shopLocation.center);
+                if(isWithinWorkingHours(new Date()) && distance <= (settings.shopLocation.radius || 50)) {
+                    await startNewSession(TrackingStatus.IN_SHOP);
+                }
             }
         } else {
-            await endCurrentSession(now);
-            await startNewSession(TrackingStatus.ON_TRIP, now);
+            // End any existing shop session before starting a trip
+            if (activeSessionRef.current) await endCurrentSession();
+            await startNewSession(TrackingStatus.ON_TRIP);
         }
     };
 
@@ -374,12 +267,13 @@ const App: React.FC = () => {
                             {...{
                                 activeView,
                                 trackingStatus,
-                                todaysShopTime,
-                                todaysTripTime,
+                                todaysShopTime: dailySummary.shopTime,
+                                todaysTripTime: dailySummary.tripTime,
+                                todaysSessions,
                                 currentSessionStartTime,
                                 hourlyRate: settings?.hourlyRate || 0,
                                 shopLocationSet: !!settings?.shopLocation?.center,
-                                endDay,
+                                endDay: endCurrentSession,
                                 toggleTrip,
                                 userId: user.mobile,
                                 isOnline,

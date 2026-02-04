@@ -6,7 +6,17 @@ import { WORK_END_HOUR } from '../constants';
 import { db } from '../services/firebase';
 import { idb } from '../utils/indexedDB';
 import MapPicker from '../components/MapPicker';
-import { DocumentSnapshot } from 'firebase/firestore';
+import { DocumentSnapshot, Timestamp } from 'firebase/firestore';
+
+// --- HELPERS ---
+const getMillis = (ts: Timestamp | number): number => typeof ts === 'number' ? ts : ts.toMillis();
+
+const formatTimestampForDisplay = (ts: Timestamp | number | undefined): string => {
+    if (!ts) return '';
+    const date = (typeof ts === 'number') ? new Date(ts) : ts.toDate();
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
 
 // --- PROPS INTERFACE ---
 interface MainScreenProps {
@@ -14,11 +24,11 @@ interface MainScreenProps {
     trackingStatus: TrackingStatus;
     todaysShopTime: number;
     todaysTripTime: number;
+    todaysSessions: (ShopSession | TripSession)[];
     currentSessionStartTime: number | null;
     hourlyRate: number;
     shopLocationSet: boolean;
     endDay: () => void;
-    isTripActive: boolean;
     toggleTrip: () => void;
     userId: string;
     isOnline: boolean;
@@ -29,14 +39,15 @@ interface MainScreenProps {
 
 // --- SUB-COMPONENTS ---
 
-const HomeScreen: React.FC<Pick<MainScreenProps, 'trackingStatus' | 'todaysShopTime' | 'todaysTripTime' | 'currentSessionStartTime' | 'hourlyRate' | 'shopLocationSet' | 'endDay'>> = ({ 
+const HomeScreen: React.FC<Pick<MainScreenProps, 'trackingStatus' | 'todaysShopTime' | 'todaysTripTime' | 'currentSessionStartTime' | 'hourlyRate' | 'shopLocationSet' | 'endDay' | 'todaysSessions'>> = ({ 
     trackingStatus, 
     todaysShopTime, 
     todaysTripTime, 
     currentSessionStartTime,
     hourlyRate,
     shopLocationSet,
-    endDay
+    endDay,
+    todaysSessions
 }) => {
     const [currentTime, setCurrentTime] = useState(Date.now());
     const [showEndDayPrompt, setShowEndDayPrompt] = useState(false);
@@ -108,6 +119,32 @@ const HomeScreen: React.FC<Pick<MainScreenProps, 'trackingStatus' | 'todaysShopT
             </div>
         </div>
     );
+    
+    const TodaysActivity = () => (
+         <div className="bg-white p-6 rounded-xl shadow-lg">
+            <h3 className="text-lg font-semibold text-gray-700 mb-4 border-b pb-2">Today's Activity</h3>
+            {todaysSessions.length > 0 ? (
+                <ul className="space-y-3">
+                    {todaysSessions.map(session => (
+                        <li key={session.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                            <div>
+                                <p className="font-medium text-gray-800">
+                                    {'path' in session ? 'Trip' : 'Shop'}
+                                    <span className="text-xs text-gray-500 ml-2">
+                                        {formatTimestampForDisplay(session.startTime)} - {session.endTime ? formatTimestampForDisplay(session.endTime) : ''}
+                                    </span>
+                                </p>
+                                {('isPending' in session && session.isPending) && <p className="text-xs text-yellow-600">Pending sync</p>}
+                            </div>
+                            <span className="font-bold text-gray-700">{formatDuration(session.durationMs || 0)}</span>
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                <p className="text-center text-gray-500 py-4">No completed sessions yet today.</p>
+            )}
+        </div>
+    );
 
     return (
         <div className="flex flex-col space-y-6">
@@ -130,12 +167,10 @@ const HomeScreen: React.FC<Pick<MainScreenProps, 'trackingStatus' | 'todaysShopT
             </div>
 
             <div className="bg-white p-6 rounded-xl shadow-lg">
-                <h3 className="text-lg font-semibold text-gray-700 mb-4">Today's Earnings</h3>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">Today's Summary</h3>
                  <div className="text-center my-4">
                     <span className="font-bold text-4xl text-green-600">₹{totalEarnings.toFixed(2)}</span>
                 </div>
-                <hr className="my-4"/>
-                <h3 className="text-lg font-semibold text-gray-700 mb-4">Time Breakdown</h3>
                 <div className="space-y-3">
                      <div className="flex justify-between items-center text-sm">
                         <span className="text-gray-500">Shop Time</span>
@@ -155,12 +190,13 @@ const HomeScreen: React.FC<Pick<MainScreenProps, 'trackingStatus' | 'todaysShopT
                     </button>
                 )}
             </div>
+            <TodaysActivity />
         </div>
     );
 };
 
-const TripScreen: React.FC<Pick<MainScreenProps, 'toggleTrip' | 'currentSessionStartTime' | 'userId' | 'shopLocationSet' | 'isOnline'>> = ({ toggleTrip, currentSessionStartTime, userId, shopLocationSet, isOnline }) => {
-    const isTripActive = !!currentSessionStartTime;
+const TripScreen: React.FC<Pick<MainScreenProps, 'toggleTrip' | 'currentSessionStartTime' | 'userId' | 'shopLocationSet' | 'isOnline' | 'trackingStatus'>> = ({ toggleTrip, currentSessionStartTime, userId, shopLocationSet, isOnline, trackingStatus }) => {
+    const isTripActive = trackingStatus === TrackingStatus.ON_TRIP;
     const [currentTime, setCurrentTime] = useState(Date.now());
     const [todaysTrips, setTodaysTrips] = useState<TripSession[]>([]);
 
@@ -172,7 +208,7 @@ const TripScreen: React.FC<Pick<MainScreenProps, 'toggleTrip' | 'currentSessionS
             const todaysPending = pendingTrips.filter(t => t.date === today && t.endTime);
             
             const combined = [...onlineTrips, ...todaysPending];
-            setTodaysTrips(combined.sort((a,b) => b.startTime - a.startTime));
+            setTodaysTrips(combined.sort((a,b) => getMillis(b.startTime) - getMillis(a.startTime)));
         };
         fetchTrips();
     }, [userId, isTripActive, isOnline]);
@@ -227,7 +263,7 @@ const TripScreen: React.FC<Pick<MainScreenProps, 'toggleTrip' | 'currentSessionS
                             <li key={trip.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
                                 <div>
                                     <p className="font-medium text-gray-800">
-                                        {new Date(trip.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {trip.endTime ? new Date(trip.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                                        {formatTimestampForDisplay(trip.startTime)} - {trip.endTime ? formatTimestampForDisplay(trip.endTime) : ''}
                                     </p>
                                     {trip.isPending && <p className="text-xs text-yellow-600">Pending sync</p>}
                                 </div>
@@ -243,7 +279,7 @@ const TripScreen: React.FC<Pick<MainScreenProps, 'toggleTrip' | 'currentSessionS
     );
 };
 
-const HistoryScreen: React.FC<Pick<MainScreenProps, 'userId' | 'hourlyRate'>> = ({ userId, hourlyRate }) => {
+const HistoryScreen: React.FC<Pick<MainScreenProps, 'userId' | 'hourlyRate' | 'isOnline'>> = ({ userId, hourlyRate, isOnline }) => {
     type AggregatedSession = ShopSession | TripSession;
     type FilterType = 'week' | 'month' | 'all';
     const PAGE_SIZE = 20;
@@ -257,7 +293,11 @@ const HistoryScreen: React.FC<Pick<MainScreenProps, 'userId' | 'hourlyRate'>> = 
     const [lastTripDoc, setLastTripDoc] = useState<DocumentSnapshot | undefined>();
     const [hasMore, setHasMore] = useState(true);
 
-    const fetchHistory = async (initialLoad = false) => {
+    const fetchHistoryFromFirebase = async (initialLoad = false) => {
+        if (!isOnline) {
+            setHasMore(false);
+            return;
+        };
         if (initialLoad) setLoading(true); else setLoadingMore(true);
 
         try {
@@ -266,12 +306,19 @@ const HistoryScreen: React.FC<Pick<MainScreenProps, 'userId' | 'hourlyRate'>> = 
                 db.getPaginatedTripSessions(userId, PAGE_SIZE, initialLoad ? undefined : lastTripDoc),
             ]);
             const newSessions = [...shopData.sessions, ...tripData.sessions];
+            await idb.cacheHistory(newSessions);
+
             setLastShopDoc(shopData.lastDoc);
             setLastTripDoc(tripData.lastDoc);
 
             if (shopData.sessions.length < PAGE_SIZE && tripData.sessions.length < PAGE_SIZE) setHasMore(false);
             
-            setAllSessions(prev => initialLoad ? newSessions : [...prev, ...newSessions]);
+            setAllSessions(prev => {
+                const combined = initialLoad ? newSessions : [...prev, ...newSessions];
+                const uniqueSessions = Array.from(new Map(combined.map(item => [item.id, item])).values());
+                return uniqueSessions;
+            });
+
         } catch (error) {
             console.error("Failed to fetch history:", error);
         } finally {
@@ -280,9 +327,22 @@ const HistoryScreen: React.FC<Pick<MainScreenProps, 'userId' | 'hourlyRate'>> = 
         }
     };
 
+    const loadHistory = async () => {
+        setLoading(true);
+        const cachedSessions = await idb.getAllHistory();
+        if (cachedSessions.length > 0) {
+            setAllSessions(cachedSessions);
+        }
+        setLoading(false);
+
+        if (isOnline) {
+           await fetchHistoryFromFirebase(true);
+        }
+    };
+
     useEffect(() => {
-        if (userId) fetchHistory(true);
-    }, [userId]);
+        if (userId) loadHistory();
+    }, [userId, isOnline]);
 
     const dailyData = useMemo(() => {
         const summary: { [key: string]: { totalDurationMs: number } } = {};
@@ -314,11 +374,14 @@ const HistoryScreen: React.FC<Pick<MainScreenProps, 'userId' | 'hourlyRate'>> = 
         <button onClick={() => setFilter(type)} className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${filter === type ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'}`}>{label}</button>
     );
 
-    if (loading) return <div className="text-center text-gray-500 mt-8">Loading history...</div>;
+    if (loading && allSessions.length === 0) return <div className="text-center text-gray-500 mt-8">Loading history...</div>;
 
     return (
         <div className="flex flex-col h-full space-y-4">
-            <h1 className="text-2xl font-bold text-gray-800">Work History</h1>
+            <div className='flex justify-between items-center'>
+                <h1 className="text-2xl font-bold text-gray-800">Work History</h1>
+                {!isOnline && <div className="text-xs px-2 py-1 rounded-full bg-yellow-100 text-yellow-700">Offline Mode</div>}
+            </div>
             <div className="flex space-x-2 bg-gray-200 p-1 rounded-lg shadow-inner">
                 <FilterButton label="This Week" type="week" />
                 <FilterButton label="This Month" type="month" />
@@ -337,7 +400,7 @@ const HistoryScreen: React.FC<Pick<MainScreenProps, 'userId' | 'hourlyRate'>> = 
                             </li>
                         ))}
                     </ul>
-                    {hasMore && filter === 'all' && <button onClick={() => fetchHistory(false)} disabled={loadingMore} className="w-full bg-gray-200 text-gray-700 font-semibold py-3 px-4 rounded-lg hover:bg-gray-300 transition duration-300 disabled:bg-gray-100">{loadingMore ? 'Loading...' : 'Load More'}</button>}
+                    {hasMore && filter === 'all' && isOnline && <button onClick={() => fetchHistoryFromFirebase(false)} disabled={loadingMore} className="w-full bg-gray-200 text-gray-700 font-semibold py-3 px-4 rounded-lg hover:bg-gray-300 transition duration-300 disabled:bg-gray-100">{loadingMore ? 'Loading...' : 'Load More'}</button>}
                 </>
             ) : <div className="text-center text-gray-500 mt-12 bg-white p-8 rounded-lg shadow"><p>No recorded history for this period.</p></div>}
         </div>
