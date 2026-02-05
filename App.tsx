@@ -27,6 +27,8 @@ const App: React.FC = () => {
     const [currentSessionStartTime, setCurrentSessionStartTime] = useState<number | null>(null);
 
     const [isOnline, setIsOnline] = useState(navigator.onLine);
+    const [isRefreshingLocation, setIsRefreshingLocation] = useState(false);
+
 
     const activeSessionRef = useRef<{ id: string; type: 'IN_SHOP' | 'ON_TRIP' } | null>(null);
     const watchIdRef = useRef<number | null>(null);
@@ -253,6 +255,60 @@ const App: React.FC = () => {
             await startNewSession(TrackingStatus.ON_TRIP);
         }
     };
+    
+    const forceLocationCheck = () => {
+        if (!user || !settings?.shopLocation?.center || isRefreshingLocation) return;
+
+        setIsRefreshingLocation(true);
+        console.log("Forcing high-accuracy location check...");
+
+        const handleSuccess = (position: GeolocationPosition) => {
+            const { latitude, longitude } = position.coords;
+            const currentPos = { lat: latitude, lng: longitude };
+            setCurrentPosition(currentPos);
+
+            if (!isWithinWorkingHours(new Date())) {
+                if (activeSessionRef.current) endCurrentSession();
+                setIsRefreshingLocation(false);
+                return;
+            }
+
+            const distance = getDistance(currentPos, settings.shopLocation!.center);
+            const isInside = distance <= (settings.shopLocation?.radius || 50);
+            const currentSessionType = activeSessionRef.current?.type;
+
+            console.log(`Manual check: distance=${distance.toFixed(1)}m, isInside=${isInside}, session=${currentSessionType || 'none'}`);
+
+            if (isInside && currentSessionType !== 'IN_SHOP') {
+                console.log("Manual check: User is inside, but not in a shop session. Correcting state.");
+                const startShopSession = () => startNewSession(TrackingStatus.IN_SHOP);
+                if (activeSessionRef.current) {
+                    endCurrentSession().then(startShopSession);
+                } else {
+                    startShopSession();
+                }
+            } else if (!isInside && currentSessionType === 'IN_SHOP') {
+                console.log("Manual check: User is outside, but in a shop session. Ending session.");
+                endCurrentSession();
+            } else {
+                 console.log("Manual check: No state change needed.");
+            }
+            setIsRefreshingLocation(false);
+        };
+
+        const handleError = (error: GeolocationPositionError) => {
+            console.error("Manual GPS Error:", error.message);
+            alert(`Error getting location: ${error.message}`);
+            setIsRefreshingLocation(false);
+        };
+
+        navigator.geolocation.getCurrentPosition(handleSuccess, handleError, {
+            enableHighAccuracy: true,
+            timeout: 15000,
+            maximumAge: 0
+        });
+    };
+
 
     if (loading) {
         return <div className="flex items-center justify-center h-screen bg-gray-900 text-white">Loading...</div>;
@@ -280,6 +336,8 @@ const App: React.FC = () => {
                                 settings,
                                 updateSettings,
                                 handleLogout,
+                                forceLocationCheck,
+                                isRefreshingLocation,
                             }}
                         />
                     </main>
