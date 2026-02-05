@@ -28,12 +28,26 @@ const App: React.FC = () => {
 
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     const [isRefreshingLocation, setIsRefreshingLocation] = useState(false);
+    const [locationError, setLocationError] = useState<string | null>(null);
+    const locationErrorTimeoutRef = useRef<number | null>(null);
 
 
     const activeSessionRef = useRef<{ id: string; type: 'IN_SHOP' | 'ON_TRIP' } | null>(null);
     const watchIdRef = useRef<number | null>(null);
     const tripPathBatchRef = useRef<LatLng[]>([]);
     const tripPathFlushIntervalRef = useRef<number | null>(null);
+
+    const handleLocationError = useCallback((message: string | null) => {
+        if (locationErrorTimeoutRef.current) {
+            clearTimeout(locationErrorTimeoutRef.current);
+        }
+        setLocationError(message);
+        if (message) {
+            locationErrorTimeoutRef.current = window.setTimeout(() => {
+                setLocationError(null);
+            }, 5000); // Clear error after 5 seconds
+        }
+    }, []);
 
     useEffect(() => {
         const handleOnline = () => setIsOnline(true);
@@ -43,6 +57,7 @@ const App: React.FC = () => {
         return () => {
             window.removeEventListener('online', handleOnline);
             window.removeEventListener('offline', handleOffline);
+            if (locationErrorTimeoutRef.current) clearTimeout(locationErrorTimeoutRef.current);
         };
     }, []);
     
@@ -210,6 +225,7 @@ const App: React.FC = () => {
         }
 
         const handlePositionUpdate = (position: GeolocationPosition) => {
+            handleLocationError(null); // Clear any existing error on success
             const { latitude, longitude } = position.coords;
             const currentPos = { lat: latitude, lng: longitude };
             setCurrentPosition(currentPos);
@@ -229,12 +245,17 @@ const App: React.FC = () => {
                 endCurrentSession();
             }
         };
-        const handleError = (error: GeolocationPositionError) => console.error("GPS Error:", error.message);
+        const handleError = (error: GeolocationPositionError) => {
+            console.error("GPS Error:", error.message);
+            if (error.code === error.TIMEOUT) {
+                handleLocationError("GPS signal weak. Trying to reconnect...");
+            }
+        };
         
-        watchIdRef.current = navigator.geolocation.watchPosition(handlePositionUpdate, handleError, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+        watchIdRef.current = navigator.geolocation.watchPosition(handlePositionUpdate, handleError, { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 });
         
         return () => { if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current); };
-    }, [user, settings, trackingStatus, endCurrentSession, startNewSession]);
+    }, [user, settings, trackingStatus, endCurrentSession, startNewSession, handleLocationError]);
 
 
     const toggleTrip = async () => {
@@ -263,6 +284,7 @@ const App: React.FC = () => {
         console.log("Forcing high-accuracy location check...");
 
         const handleSuccess = (position: GeolocationPosition) => {
+            handleLocationError(null); // Clear error on success
             const { latitude, longitude } = position.coords;
             const currentPos = { lat: latitude, lng: longitude };
             setCurrentPosition(currentPos);
@@ -298,13 +320,17 @@ const App: React.FC = () => {
 
         const handleError = (error: GeolocationPositionError) => {
             console.error("Manual GPS Error:", error.message);
-            alert(`Error getting location: ${error.message}`);
+             if (error.code === error.TIMEOUT) {
+                 handleLocationError("Could not get location. Please try again in an open area.");
+            } else {
+                 handleLocationError(`Error: ${error.message}`);
+            }
             setIsRefreshingLocation(false);
         };
 
         navigator.geolocation.getCurrentPosition(handleSuccess, handleError, {
             enableHighAccuracy: true,
-            timeout: 15000,
+            timeout: 25000,
             maximumAge: 0
         });
     };
@@ -338,6 +364,7 @@ const App: React.FC = () => {
                                 handleLogout,
                                 forceLocationCheck,
                                 isRefreshingLocation,
+                                locationError,
                             }}
                         />
                     </main>

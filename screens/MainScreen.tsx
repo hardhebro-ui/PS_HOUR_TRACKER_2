@@ -37,11 +37,12 @@ interface MainScreenProps {
     handleLogout: () => void;
     forceLocationCheck: () => void;
     isRefreshingLocation: boolean;
+    locationError: string | null;
 }
 
 // --- SUB-COMPONENTS ---
 
-const HomeScreen: React.FC<Pick<MainScreenProps, 'trackingStatus' | 'todaysShopTime' | 'todaysTripTime' | 'currentSessionStartTime' | 'hourlyRate' | 'shopLocationSet' | 'endDay' | 'todaysSessions' | 'forceLocationCheck' | 'isRefreshingLocation'>> = ({ 
+const HomeScreen: React.FC<Pick<MainScreenProps, 'trackingStatus' | 'todaysShopTime' | 'todaysTripTime' | 'currentSessionStartTime' | 'hourlyRate' | 'shopLocationSet' | 'endDay' | 'todaysSessions' | 'forceLocationCheck' | 'isRefreshingLocation' | 'locationError'>> = ({ 
     trackingStatus, 
     todaysShopTime, 
     todaysTripTime, 
@@ -51,7 +52,8 @@ const HomeScreen: React.FC<Pick<MainScreenProps, 'trackingStatus' | 'todaysShopT
     endDay,
     todaysSessions,
     forceLocationCheck,
-    isRefreshingLocation
+    isRefreshingLocation,
+    locationError
 }) => {
     const [currentTime, setCurrentTime] = useState(Date.now());
     const [showEndDayPrompt, setShowEndDayPrompt] = useState(false);
@@ -150,8 +152,19 @@ const HomeScreen: React.FC<Pick<MainScreenProps, 'trackingStatus' | 'todaysShopT
         </div>
     );
 
+    const LocationErrorBanner = () => {
+        if (!locationError) return null;
+        return (
+            <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-3 rounded-md mb-4 text-sm" role="alert">
+                <p className="font-bold">Location Notice</p>
+                <p>{locationError}</p>
+            </div>
+        );
+    };
+
     return (
         <div className="flex flex-col space-y-6">
+            <LocationErrorBanner />
             {showEndDayPrompt && <EndDayModal />}
             <div className="text-center bg-white p-6 rounded-xl shadow-lg">
                 <div className="flex items-center justify-center mb-2">
