@@ -21,7 +21,6 @@ const App: React.FC = () => {
     const [currentPosition, setCurrentPosition] = useState<LatLng | null>(null);
     const [activeView, setActiveView] = useState<AppView>('home');
     
-    // State now driven by daily summary for efficiency
     const [dailySummary, setDailySummary] = useState<DailySummary>({ date: getTodaysDateString(), shopTime: 0, tripTime: 0, totalTime: 0 });
     const [todaysSessions, setTodaysSessions] = useState<(ShopSession | TripSession)[]>([]);
     const [currentSessionStartTime, setCurrentSessionStartTime] = useState<number | null>(null);
@@ -31,11 +30,7 @@ const App: React.FC = () => {
     const [locationError, setLocationError] = useState<string | null>(null);
     const locationErrorTimeoutRef = useRef<number | null>(null);
 
-
     const activeSessionRef = useRef<{ id: string; type: 'IN_SHOP' | 'ON_TRIP' } | null>(null);
-    const watchIdRef = useRef<number | null>(null);
-    const tripPathBatchRef = useRef<LatLng[]>([]);
-    const tripPathFlushIntervalRef = useRef<number | null>(null);
 
     const handleLocationError = useCallback((message: string | null) => {
         if (locationErrorTimeoutRef.current) {
@@ -45,129 +40,29 @@ const App: React.FC = () => {
         if (message) {
             locationErrorTimeoutRef.current = window.setTimeout(() => {
                 setLocationError(null);
-            }, 5000); // Clear error after 5 seconds
+            }, 5000);
         }
-    }, []);
-
-    useEffect(() => {
-        const handleOnline = () => setIsOnline(true);
-        const handleOffline = () => setIsOnline(false);
-        window.addEventListener('online', handleOnline);
-        window.addEventListener('offline', handleOffline);
-        return () => {
-            window.removeEventListener('online', handleOnline);
-            window.removeEventListener('offline', handleOffline);
-            if (locationErrorTimeoutRef.current) clearTimeout(locationErrorTimeoutRef.current);
-        };
     }, []);
     
     const fetchTodaysData = useCallback(async (userId: string) => {
         const today = getTodaysDateString();
-        // Fetch the efficient daily summary
         const summary = await db.getDailySummary(userId, today);
         setDailySummary(summary);
         
-        // Fetch full sessions for the activity log
         const shopSessions = await db.getShopSessions(userId, today);
         const tripSessions = await db.getTripSessions(userId, today);
-        const pendingTrips = await idb.getAllPendingTrips();
         
         const allTodaysSessions = [
             ...shopSessions.filter(s => s.endTime), 
             ...tripSessions.filter(t => t.endTime),
-            ...pendingTrips.filter(t => t.date === today && t.endTime)
         ].sort((a, b) => getMillis(b.startTime) - getMillis(a.startTime));
         setTodaysSessions(allTodaysSessions);
     }, []);
 
-    const syncOfflineData = useCallback(async (userId: string) => {
-        // This function would be expanded to handle offline-created shop sessions if needed
-        const pendingTrips = await idb.getAllPendingTrips();
-        if (pendingTrips.length === 0) return;
-
-        console.log(`Syncing ${pendingTrips.length} offline trips...`);
-        try {
-            for (const trip of pendingTrips) {
-                const session: Omit<TripSession, 'id'> = { ...trip, startTime: new Timestamp(trip.startTime as any / 1000, 0), endTime: new Timestamp(trip.endTime as any / 1000, 0) };
-                const newId = await db.addTripSession(userId, session.date, null); // startTime is tricky here
-                await db.updateTripSession(userId, newId, session);
-                await db.updateDailySummary(userId, trip.date, trip.durationMs!, 'trip');
-            }
-            await idb.clearPendingTrips();
-            console.log('Offline trips synced successfully.');
-            fetchTodaysData(userId);
-        } catch (error) {
-            console.error("Failed to sync offline trips:", error);
-        }
-    }, [fetchTodaysData]);
-
-    useEffect(() => {
-        const unsubscribe = db.onAuthChange(async (firebaseUser) => {
-            if (firebaseUser && firebaseUser.email) {
-                const mobile = firebaseUser.email.split('@')[0];
-                const appUser = await db.getUser(mobile);
-                if(appUser){
-                    setUser(appUser);
-                    const userSettings = await db.getSettings(appUser.mobile);
-                    setSettings(userSettings);
-                    if (navigator.onLine) await syncOfflineData(appUser.mobile);
-                }
-            } else {
-                setUser(null);
-                setSettings(null);
-            }
-            setLoading(false);
-        });
-        return () => unsubscribe();
-    }, [syncOfflineData]);
-    
-    // Main state recovery and initialization logic
-    useEffect(() => {
-        if (!user) return;
-
-        const initializeUserSession = async () => {
-            const today = getTodaysDateString();
-            await fetchTodaysData(user.mobile);
-            
-            // Check for an open session from today
-            const openSession = await db.getOpenSessionForToday(user.mobile, today);
-
-            if (openSession) {
-                console.log("Resuming active session from DB:", openSession);
-                const status = (openSession as any).type as 'IN_SHOP' | 'ON_TRIP';
-                activeSessionRef.current = { id: openSession.id, type: status };
-                setCurrentSessionStartTime(openSession.startTime.toMillis());
-                setTrackingStatus(TrackingStatus[status]);
-
-                // Auto-end session if it's past working hours
-                if (!isWithinWorkingHours(new Date())) {
-                    endCurrentSession();
-                }
-            } else {
-                 setTrackingStatus(TrackingStatus.IDLE);
-                 setCurrentSessionStartTime(null);
-                 activeSessionRef.current = null;
-            }
-        };
-
-        initializeUserSession();
-    }, [user, fetchTodaysData]);
-
-    const handleLogout = async () => {
-        if(watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
-        await endCurrentSession();
-        await db.logoutUser();
-    };
-
-    const updateSettings = (newSettings: UserSettings) => {
-        setSettings(newSettings);
-        if (user) db.saveSettings(user.mobile, newSettings);
-    };
-
-    const endCurrentSession = useCallback(async () => {
+    const endCurrentSession = useCallback(async (bypassTimeCheck = false) => {
         if (!user || !activeSessionRef.current) return;
-        
-        console.log('Ending session:', activeSessionRef.current.id);
+
+        console.log('Attempting to end session:', activeSessionRef.current.id);
         const { id, type } = activeSessionRef.current;
         let durationMs = 0;
 
@@ -186,7 +81,7 @@ const App: React.FC = () => {
         activeSessionRef.current = null;
         setCurrentSessionStartTime(null);
         setTrackingStatus(TrackingStatus.IDLE);
-        await fetchTodaysData(user.mobile); // Refresh data
+        await fetchTodaysData(user.mobile);
     }, [user, fetchTodaysData]);
 
     const startNewSession = useCallback(async (status: TrackingStatus.IN_SHOP | TrackingStatus.ON_TRIP) => {
@@ -196,16 +91,20 @@ const App: React.FC = () => {
         console.log(`Starting new ${status} session.`);
 
         try {
-            let sessionId: string;
-            if (status === TrackingStatus.IN_SHOP) {
-                sessionId = await db.addShopSession(user.mobile, today);
-            } else { // ON_TRIP
-                sessionId = await db.addTripSession(user.mobile, today, currentPosition);
+            if (!isWithinWorkingHours(new Date())) {
+                console.log("Cannot start session outside of working hours.");
+                return;
             }
-            // After starting, immediately fetch the new state from the DB to get server timestamp
+            
+            if (status === TrackingStatus.IN_SHOP) {
+                await db.addShopSession(user.mobile, today);
+            } else {
+                await db.addTripSession(user.mobile, today, currentPosition);
+            }
+
             const openSession = await db.getOpenSessionForToday(user.mobile, today);
             if (openSession) {
-                activeSessionRef.current = { id: openSession.id, type: status };
+                activeSessionRef.current = { id: openSession.id, type: (openSession as any).type };
                 setCurrentSessionStartTime(openSession.startTime.toMillis());
                 setTrackingStatus(status);
             }
@@ -214,128 +113,133 @@ const App: React.FC = () => {
         }
     }, [user, currentPosition]);
 
-    // GPS tracking effect
-    useEffect(() => {
-        if (!user || !settings?.shopLocation?.center || trackingStatus === TrackingStatus.ON_TRIP) {
-            if (watchIdRef.current) {
-                navigator.geolocation.clearWatch(watchIdRef.current);
-                watchIdRef.current = null;
+    const reconcileLocationState = useCallback(async () => {
+        if (!user || !settings?.shopLocation?.center || isRefreshingLocation) return;
+        setIsRefreshingLocation(true);
+        console.log("Reconciling location state...");
+    
+        const openSession = await db.getOpenSessionForToday(user.mobile, getTodaysDateString());
+        const openSessionType = openSession ? (openSession as any).type : null;
+    
+        if (!isWithinWorkingHours(new Date())) {
+            if (openSession) {
+                console.log("Outside working hours. Ending any open session.");
+                await endCurrentSession(true);
             }
+            setIsRefreshingLocation(false);
             return;
         }
-
-        const handlePositionUpdate = (position: GeolocationPosition) => {
-            handleLocationError(null); // Clear any existing error on success
-            const { latitude, longitude } = position.coords;
-            const currentPos = { lat: latitude, lng: longitude };
+    
+        navigator.geolocation.getCurrentPosition(async (position) => {
+            handleLocationError(null);
+            const currentPos = { lat: position.coords.latitude, lng: position.coords.longitude };
             setCurrentPosition(currentPos);
-
-            if (!isWithinWorkingHours(new Date())) {
-                if (activeSessionRef.current) endCurrentSession();
-                return;
-            }
-
+    
             const distance = getDistance(currentPos, settings.shopLocation!.center);
             const isInside = distance <= (settings.shopLocation?.radius || 50);
-            const isInShopSession = activeSessionRef.current?.type === 'IN_SHOP';
+    
+            if (isInside && openSessionType !== 'IN_SHOP') {
+                if (openSession) await endCurrentSession();
+                await startNewSession(TrackingStatus.IN_SHOP);
+            } else if (!isInside && openSessionType === 'IN_SHOP') {
+                await endCurrentSession();
+            }
+            setIsRefreshingLocation(false);
+        }, async (error) => {
+            console.error("GPS Error on reconcile:", error.message);
+            let errorMessage = "Could not get location. Tracking is paused.";
+            if (error.code === error.PERMISSION_DENIED) {
+                errorMessage = "Location permission denied. Tracking is paused.";
+            }
+            handleLocationError(errorMessage);
 
-            if (isInside && !isInShopSession) {
-                startNewSession(TrackingStatus.IN_SHOP);
-            } else if (!isInside && isInShopSession) {
-                endCurrentSession();
+            if (openSession) {
+                console.log("Ending session due to location error.");
+                await endCurrentSession();
+            }
+            setIsRefreshingLocation(false);
+        }, { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 });
+    
+    }, [user, settings, isRefreshingLocation, handleLocationError, endCurrentSession, startNewSession]);
+
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible' && user) {
+                console.log("App is visible, reconciling state.");
+                reconcileLocationState();
             }
         };
-        const handleError = (error: GeolocationPositionError) => {
-            console.error("GPS Error:", error.message);
-            if (error.code === error.TIMEOUT) {
-                handleLocationError("GPS signal weak. Trying to reconnect...");
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, [user, reconcileLocationState]);
+
+    useEffect(() => {
+        const unsubscribe = db.onAuthChange(async (firebaseUser) => {
+            if (firebaseUser && firebaseUser.email) {
+                const mobile = firebaseUser.email.split('@')[0];
+                const appUser = await db.getUser(mobile);
+                if (appUser) {
+                    setUser(appUser);
+                    const userSettings = await db.getSettings(appUser.mobile);
+                    setSettings(userSettings);
+                }
+            } else {
+                setUser(null);
+                setSettings(null);
             }
+            setLoading(false);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    useEffect(() => {
+        if (!user) return;
+    
+        const initializeUserSession = async () => {
+            await fetchTodaysData(user.mobile);
+            const openSession = await db.getOpenSessionForToday(user.mobile, getTodaysDateString());
+    
+            if (openSession) {
+                console.log("Found open session on load:", openSession);
+                activeSessionRef.current = { id: openSession.id, type: (openSession as any).type };
+                setCurrentSessionStartTime(openSession.startTime.toMillis());
+                setTrackingStatus(TrackingStatus[(openSession as any).type]);
+            } else {
+                activeSessionRef.current = null;
+                setCurrentSessionStartTime(null);
+                setTrackingStatus(TrackingStatus.IDLE);
+            }
+            // Trigger reconciliation to check if the state is still valid
+            reconcileLocationState();
         };
-        
-        watchIdRef.current = navigator.geolocation.watchPosition(handlePositionUpdate, handleError, { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 });
-        
-        return () => { if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current); };
-    }, [user, settings, trackingStatus, endCurrentSession, startNewSession, handleLocationError]);
+    
+        initializeUserSession();
+    }, [user, settings]); // Rerun if settings load after user
+    
+    const handleLogout = async () => {
+        if (activeSessionRef.current) await endCurrentSession();
+        await db.logoutUser();
+    };
 
-
+    const updateSettings = (newSettings: UserSettings) => {
+        setSettings(newSettings);
+        if (user) db.saveSettings(user.mobile, newSettings);
+    };
+    
     const toggleTrip = async () => {
         if (!user || !settings?.shopLocation?.center) return;
         
         if (activeSessionRef.current?.type === 'ON_TRIP') {
             await endCurrentSession();
-            // Check if we are now inside the shop to start a shop session
-            if (currentPosition) {
-                const distance = getDistance(currentPosition, settings.shopLocation.center);
-                if(isWithinWorkingHours(new Date()) && distance <= (settings.shopLocation.radius || 50)) {
-                    await startNewSession(TrackingStatus.IN_SHOP);
-                }
-            }
+            // After ending a trip, reconcile state to check if we should start a shop session
+            reconcileLocationState();
         } else {
-            // End any existing shop session before starting a trip
             if (activeSessionRef.current) await endCurrentSession();
             await startNewSession(TrackingStatus.ON_TRIP);
         }
     };
     
-    const forceLocationCheck = () => {
-        if (!user || !settings?.shopLocation?.center || isRefreshingLocation) return;
-
-        setIsRefreshingLocation(true);
-        console.log("Forcing high-accuracy location check...");
-
-        const handleSuccess = (position: GeolocationPosition) => {
-            handleLocationError(null); // Clear error on success
-            const { latitude, longitude } = position.coords;
-            const currentPos = { lat: latitude, lng: longitude };
-            setCurrentPosition(currentPos);
-
-            if (!isWithinWorkingHours(new Date())) {
-                if (activeSessionRef.current) endCurrentSession();
-                setIsRefreshingLocation(false);
-                return;
-            }
-
-            const distance = getDistance(currentPos, settings.shopLocation!.center);
-            const isInside = distance <= (settings.shopLocation?.radius || 50);
-            const currentSessionType = activeSessionRef.current?.type;
-
-            console.log(`Manual check: distance=${distance.toFixed(1)}m, isInside=${isInside}, session=${currentSessionType || 'none'}`);
-
-            if (isInside && currentSessionType !== 'IN_SHOP') {
-                console.log("Manual check: User is inside, but not in a shop session. Correcting state.");
-                const startShopSession = () => startNewSession(TrackingStatus.IN_SHOP);
-                if (activeSessionRef.current) {
-                    endCurrentSession().then(startShopSession);
-                } else {
-                    startShopSession();
-                }
-            } else if (!isInside && currentSessionType === 'IN_SHOP') {
-                console.log("Manual check: User is outside, but in a shop session. Ending session.");
-                endCurrentSession();
-            } else {
-                 console.log("Manual check: No state change needed.");
-            }
-            setIsRefreshingLocation(false);
-        };
-
-        const handleError = (error: GeolocationPositionError) => {
-            console.error("Manual GPS Error:", error.message);
-             if (error.code === error.TIMEOUT) {
-                 handleLocationError("Could not get location. Please try again in an open area.");
-            } else {
-                 handleLocationError(`Error: ${error.message}`);
-            }
-            setIsRefreshingLocation(false);
-        };
-
-        navigator.geolocation.getCurrentPosition(handleSuccess, handleError, {
-            enableHighAccuracy: true,
-            timeout: 25000,
-            maximumAge: 0
-        });
-    };
-
-
     if (loading) {
         return <div className="flex items-center justify-center h-screen bg-gray-900 text-white">Loading...</div>;
     }
@@ -362,7 +266,7 @@ const App: React.FC = () => {
                                 settings,
                                 updateSettings,
                                 handleLogout,
-                                forceLocationCheck,
+                                forceLocationCheck: reconcileLocationState,
                                 isRefreshingLocation,
                                 locationError,
                             }}
